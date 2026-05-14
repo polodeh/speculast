@@ -42,8 +42,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from unittest.mock import AsyncMock, MagicMock
 {% endif %}
 
-{% for module, objects in modules.items() %}
-from {{ module }} import {{ objects|join(', ') }}
+{% for module_import in module_imports %}
+from {{ module_import.module }} import {{ module_import.imports|map(attribute='rendered')|join(', ') }}
 {% endfor %}
 
 MODULE_IMPORTS = {
@@ -458,10 +458,7 @@ def _resolve_target(
     module_objects = _module_objects(str(case["module"]))
     class_name = case["class_name"]
     if class_name:
-        class_obj = module_objects.get(str(class_name))
-        if class_obj is None:
-            imported_module = importlib.import_module(str(case["module"]))
-            class_obj = getattr(imported_module, str(class_name))
+        class_obj = _resolve_owner_object(case, module_objects)
         instance = _instantiate_class(class_obj, tmp_path=tmp_path)
         return getattr(instance, str(case["name"]))
     target = module_objects.get(str(case["name"]))
@@ -469,6 +466,22 @@ def _resolve_target(
         return target
     imported_module = importlib.import_module(str(case["module"]))
     return getattr(imported_module, str(case["name"]))
+
+
+def _resolve_owner_object(case: dict[str, Any], module_objects: dict[str, object]) -> type[Any]:
+    class_path = str(case["qualname"]).split(".")[:-1]
+    if not class_path:
+        raise AttributeError(f"Unable to resolve owning class for {case['qualname']}.")
+
+    imported_module = importlib.import_module(str(case["module"]))
+    current: object | None = module_objects.get(class_path[0])
+    if current is None:
+        current = getattr(imported_module, class_path[0])
+    for part in class_path[1:]:
+        current = getattr(current, part)
+    if not inspect.isclass(current):
+        raise TypeError(f"Resolved owner for {case['qualname']} is not a class.")
+    return current
 
 
 def _uses_json_load(case: dict[str, Any]) -> bool:
@@ -608,6 +621,8 @@ def _synthesize_value(
         return "https://example.com"
     if "str" in annotation:
         return f"sample_{name or 'value'}"
+    if not annotation:
+        return "generated_str" if bool(argument["required"]) else None
     if name in {"data", "payload", "body"}:
         return {"sample": 1}
     if name in {"timeout", "delay", "duration"}:

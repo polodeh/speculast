@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..analyzer.visitors import ImportsVisitor
-from ..core.i18n import LanguageCode, normalize_language, tr
+from ..core.i18n import LanguageCode, normalize_language, repair_text, tr
 from ..core.models import (
     AnalysisResult,
     FunctionContextSchema,
@@ -504,10 +504,12 @@ class VisualReportRenderer:
         rows: dict[str, dict[str, Any]] = {}
         for module_key in ordered_keys:
             items = grouped[module_key]
-            label = self.MODULE_LABELS_RU.get(module_key, module_key.capitalize())
+            label = repair_text(self.MODULE_LABELS_RU.get(module_key, module_key.capitalize()))
             rows[module_key] = {
                 "label": label,
-                "description": f"{label}: {len(items)} функций, {sum(len(item['external_calls']) for item in items)} внешних вызовов.",
+                "description": repair_text(
+                    f"{label}: {len(items)} функций, {sum(len(item['external_calls']) for item in items)} внешних вызовов."
+                ),
                 "function_count": len(items),
                 "call_count": sum(int(item["call_count"]) for item in items),
                 "summary": ", ".join(sorted({str(item['name']) for item in items})) or tr(self.lang, "shared.common.none"),
@@ -1086,7 +1088,8 @@ class VisualReportRenderer:
             return tr(language, f"shared.module_names.{module_key}")
         except KeyError:
             labels = cls.MODULE_LABELS_RU if language == "ru" else cls.MODULE_LABELS_EN
-            return labels.get(module_key, cls._humanize_identifier(module_key))
+            label = labels.get(module_key, cls._humanize_identifier(module_key))
+            return repair_text(label) if language == "ru" else label
 
     @staticmethod
     def _humanize_identifier(value: str) -> str:
@@ -1118,7 +1121,9 @@ class VisualReportRenderer:
         if context is not None:
             ru_description = context.description_ru
         else:
-            ru_description = f"Функция {label} анализируется без дополнительного описания."
+            ru_description = repair_text(
+                f"Функция {label} анализируется без дополнительного описания."
+            )
 
         if database_score > 0:
             en_description = (
@@ -1169,12 +1174,12 @@ class VisualReportRenderer:
         root = self._root_token(call_name)
         if root in self.DATABASE_IMPORTS or "session" in call_name.lower():
             return (
-                "Вызов связан с контуром базы данных и влияет на интеграционный сценарий."
+                repair_text("Вызов связан с контуром базы данных и влияет на интеграционный сценарий.")
                 if resolved_language == "ru"
                 else "The call touches the database layer and affects integration readiness."
             )
         return (
-            f"Внешний вызов {call_name}, который был извлечён из AST тела функции."
+            repair_text(f"Внешний вызов {call_name}, который был извлечён из AST тела функции.")
             if resolved_language == "ru"
             else f"External call {call_name} extracted from the function body AST."
         )

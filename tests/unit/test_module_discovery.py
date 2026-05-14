@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from engine.core.models import FunctionSchema
-from engine.parser import build_module_members, derive_module_name
+from engine.parser import build_module_members, collect_source_roots, derive_module_name, detect_source_root
 
 
 def build_function(
@@ -67,3 +67,14 @@ def test_build_module_members_groups_top_level_functions_and_classes(tmp_path) -
         "calculator": ["add", "Counter"],
         "strings": ["shout"],
     }
+
+
+def test_detect_source_root_prefers_src_layout_for_nested_packages(tmp_path) -> None:
+    source_root = tmp_path / "src"
+    nested_module = source_root / "myapp" / "utils" / "helper.py"
+    nested_module.parent.mkdir(parents=True, exist_ok=True)
+    nested_module.write_text("def slugify(value): return value\n", encoding="utf-8")
+
+    assert detect_source_root(nested_module, tmp_path) == source_root.resolve()
+    assert derive_module_name(nested_module, source_root) == "myapp.utils.helper"
+    assert collect_source_roots((nested_module,), tmp_path) == (source_root.resolve(),)

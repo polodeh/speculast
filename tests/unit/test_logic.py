@@ -1,4 +1,4 @@
-"""Auto-generated unit tests for demo_shop.logic."""
+"""Sample-project regression checks for arithmetic business rules."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ from decimal import Decimal
 
 import pytest
 
-from demo_shop.logic import (
-    calculate_discount,
-    calculate_line_total,
-    calculate_order_total,
-    validate_stock,
-)
+from tests.support.sample_project import load_sample_module
+
+
+logic_module = load_sample_module("logic")
+calculate_discount = logic_module.calculate_discount
+calculate_line_total = logic_module.calculate_line_total
+calculate_order_total = logic_module.calculate_order_total
+validate_stock = logic_module.validate_stock
 
 
 def test_calculate_line_total_multiplies_price_by_quantity() -> None:

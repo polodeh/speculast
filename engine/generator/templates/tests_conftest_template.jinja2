@@ -6,10 +6,17 @@ import asyncio
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CURRENT_FILE = Path(__file__).resolve()
+GENERATED_PROJECT_ROOT = Path({{ project_root_path|tojson }})
+SOURCE_ROOTS = [Path(path) for path in {{ project_source_roots|tojson }}]
+PROJECT_ROOT = GENERATED_PROJECT_ROOT if GENERATED_PROJECT_ROOT.exists() else next(
+    (candidate for candidate in CURRENT_FILE.parents if (candidate / "tests").is_dir()),
+    CURRENT_FILE.parent.parent,
+)
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+for source_root in [*SOURCE_ROOTS, PROJECT_ROOT]:
+    if source_root.exists() and str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

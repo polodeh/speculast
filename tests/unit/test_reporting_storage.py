@@ -144,6 +144,7 @@ def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
     removable_tmp_directory = tmp_path / ".tmp_chrome_report_test"
     removable_cache_directory = tmp_path / "__pycache__"
     removable_dot_file = tmp_path / ".coverage"
+    removable_tmp_file = tmp_path / "tmp_session.log"
     removable_artifacts_directory = tmp_path / ".speculast"
     preserved_reports = tmp_path / "reports"
     preserved_engine = tmp_path / "engine"
@@ -156,6 +157,7 @@ def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
     preserved_reports.mkdir(parents=True, exist_ok=True)
     preserved_engine.mkdir(parents=True, exist_ok=True)
     removable_dot_file.write_text("coverage", encoding="utf-8")
+    removable_tmp_file.write_text("session", encoding="utf-8")
     preserved_gitignore.write_text("keep", encoding="utf-8")
 
     removed_artifacts = cleanup_temp_artifacts(tmp_path)
@@ -165,12 +167,14 @@ def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
         removable_tmp_directory.resolve(),
         removable_cache_directory.resolve(),
         removable_dot_file.resolve(),
+        removable_tmp_file.resolve(),
         removable_artifacts_directory.resolve(),
     }
     assert not removable_directory.exists()
     assert not removable_tmp_directory.exists()
     assert not removable_cache_directory.exists()
     assert not removable_dot_file.exists()
+    assert not removable_tmp_file.exists()
     assert not removable_artifacts_directory.exists()
     assert preserved_reports.exists()
     assert preserved_engine.exists()

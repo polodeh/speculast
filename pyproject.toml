@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "speculast"
-version = "1.0.3"
+version = "1.0.6"
 description = "Semantic-first framework for Python architecture analysis, automated test generation, and infrastructure-aware reporting."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -69,7 +69,6 @@ include = [
   "README.md",
   "main.py",
   "engine",
-  "demo_shop",
   "tests",
 ]
 

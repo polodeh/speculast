@@ -1,4 +1,4 @@
-"""Coordinator for AST-based project analysis."""
+﻿"""Coordinator for AST-based project analysis."""
 
 from __future__ import annotations
 
@@ -9,14 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .visitors import CallsVisitor, DefinitionsVisitor, FunctionKey, ImportsVisitor
+from ..core.i18n import repair_text
 from ..core.models import (
     AnalysisResult,
+    AnalysisWarningSchema,
     FunctionContextSchema,
     FunctionSchema,
     ProjectMetadata,
 )
 from ..core.protocols import IAnalyzer
-from ..parser import derive_module_name, read_python_source
+from ..parser import collect_source_roots, derive_module_name, detect_source_root, read_python_source
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,74 +27,75 @@ class ModuleAnalysis:
 
     imports: list[str]
     functions: tuple[FunctionSchema, ...]
+    warnings: tuple[AnalysisWarningSchema, ...] = ()
 
 
 class AnalyzerEngine(IAnalyzer):
     """Default analyzer that orchestrates visitor-based AST traversal."""
 
     MODULE_LABELS_RU = {
-        "models": "Модели данных",
-        "logic": "Бизнес-логика",
-        "service": "Сервис оформления",
-        "database": "Слой данных",
-        "generator": "Генерация артефактов",
-        "infra": "Инфраструктурный контур",
-        "visualizer": "Визуальный контур",
-        "core": "Ядро движка",
-        "analyzer": "Семантический анализатор",
+        "models": "РњРѕРґРµР»Рё РґР°РЅРЅС‹С…",
+        "logic": "Р‘РёР·РЅРµСЃ-Р»РѕРіРёРєР°",
+        "service": "РЎРµСЂРІРёСЃ РѕС„РѕСЂРјР»РµРЅРёСЏ",
+        "database": "РЎР»РѕР№ РґР°РЅРЅС‹С…",
+        "generator": "Р“РµРЅРµСЂР°С†РёСЏ Р°СЂС‚РµС„Р°РєС‚РѕРІ",
+        "infra": "РРЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂРЅС‹Р№ РєРѕРЅС‚СѓСЂ",
+        "visualizer": "Р’РёР·СѓР°Р»СЊРЅС‹Р№ РєРѕРЅС‚СѓСЂ",
+        "core": "РЇРґСЂРѕ РґРІРёР¶РєР°",
+        "analyzer": "РЎРµРјР°РЅС‚РёС‡РµСЃРєРёР№ Р°РЅР°Р»РёР·Р°С‚РѕСЂ",
     }
     SPECIAL_CONTEXT_RU = {
-        "demo_shop.database.resolve_database_url": (
-            "Разрешение адреса PostgreSQL",
-            "Собирает и возвращает итоговый адрес подключения к PostgreSQL для сервисного контура магазина.",
+        "database.resolve_database_url": (
+            "Р Р°Р·СЂРµС€РµРЅРёРµ Р°РґСЂРµСЃР° PostgreSQL",
+            "РЎРѕР±РёСЂР°РµС‚ Рё РІРѕР·РІСЂР°С‰Р°РµС‚ РёС‚РѕРіРѕРІС‹Р№ Р°РґСЂРµСЃ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє PostgreSQL РґР»СЏ СЃРµСЂРІРёСЃРЅРѕРіРѕ РєРѕРЅС‚СѓСЂР° РјР°РіР°Р·РёРЅР°.",
         ),
-        "demo_shop.database.create_engine": (
-            "Создание асинхронного SQLAlchemy engine",
-            "Поднимает асинхронный SQLAlchemy engine для работы сервисов магазина с PostgreSQL.",
+        "database.create_engine": (
+            "РЎРѕР·РґР°РЅРёРµ Р°СЃРёРЅС…СЂРѕРЅРЅРѕРіРѕ SQLAlchemy engine",
+            "РџРѕРґРЅРёРјР°РµС‚ Р°СЃРёРЅС…СЂРѕРЅРЅС‹Р№ SQLAlchemy engine РґР»СЏ СЂР°Р±РѕС‚С‹ СЃРµСЂРІРёСЃРѕРІ РјР°РіР°Р·РёРЅР° СЃ PostgreSQL.",
         ),
-        "demo_shop.database.create_session_factory": (
-            "Создание фабрики асинхронных сессий",
-            "Формирует session factory, через которую сервисный слой получает асинхронные транзакционные сессии.",
+        "database.create_session_factory": (
+            "РЎРѕР·РґР°РЅРёРµ С„Р°Р±СЂРёРєРё Р°СЃРёРЅС…СЂРѕРЅРЅС‹С… СЃРµСЃСЃРёР№",
+            "Р¤РѕСЂРјРёСЂСѓРµС‚ session factory, С‡РµСЂРµР· РєРѕС‚РѕСЂСѓСЋ СЃРµСЂРІРёСЃРЅС‹Р№ СЃР»РѕР№ РїРѕР»СѓС‡Р°РµС‚ Р°СЃРёРЅС…СЂРѕРЅРЅС‹Рµ С‚СЂР°РЅР·Р°РєС†РёРѕРЅРЅС‹Рµ СЃРµСЃСЃРёРё.",
         ),
-        "demo_shop.logic.calculate_line_total": (
-            "Расчёт суммы позиции заказа",
-            "Проверяет корректность количества товара и рассчитывает денежную сумму конкретной позиции заказа.",
+        "logic.calculate_line_total": (
+            "Р Р°СЃС‡С‘С‚ СЃСѓРјРјС‹ РїРѕР·РёС†РёРё Р·Р°РєР°Р·Р°",
+            "РџСЂРѕРІРµСЂСЏРµС‚ РєРѕСЂСЂРµРєС‚РЅРѕСЃС‚СЊ РєРѕР»РёС‡РµСЃС‚РІР° С‚РѕРІР°СЂР° Рё СЂР°СЃСЃС‡РёС‚С‹РІР°РµС‚ РґРµРЅРµР¶РЅСѓСЋ СЃСѓРјРјСѓ РєРѕРЅРєСЂРµС‚РЅРѕР№ РїРѕР·РёС†РёРё Р·Р°РєР°Р·Р°.",
         ),
-        "demo_shop.logic.calculate_discount": (
-            "Применение скидки по промокоду",
-            "Определяет величину скидки для заказа, нормализует денежный результат и учитывает промокод клиента.",
+        "logic.calculate_discount": (
+            "РџСЂРёРјРµРЅРµРЅРёРµ СЃРєРёРґРєРё РїРѕ РїСЂРѕРјРѕРєРѕРґСѓ",
+            "РћРїСЂРµРґРµР»СЏРµС‚ РІРµР»РёС‡РёРЅСѓ СЃРєРёРґРєРё РґР»СЏ Р·Р°РєР°Р·Р°, РЅРѕСЂРјР°Р»РёР·СѓРµС‚ РґРµРЅРµР¶РЅС‹Р№ СЂРµР·СѓР»СЊС‚Р°С‚ Рё СѓС‡РёС‚С‹РІР°РµС‚ РїСЂРѕРјРѕРєРѕРґ РєР»РёРµРЅС‚Р°.",
         ),
-        "demo_shop.logic.calculate_order_total": (
-            "Расчёт итоговой суммы заказа",
-            "Складывает суммы позиций, проверяет итог и формирует финальную стоимость заказа после всех вычислений.",
+        "logic.calculate_order_total": (
+            "Р Р°СЃС‡С‘С‚ РёС‚РѕРіРѕРІРѕР№ СЃСѓРјРјС‹ Р·Р°РєР°Р·Р°",
+            "РЎРєР»Р°РґС‹РІР°РµС‚ СЃСѓРјРјС‹ РїРѕР·РёС†РёР№, РїСЂРѕРІРµСЂСЏРµС‚ РёС‚РѕРі Рё С„РѕСЂРјРёСЂСѓРµС‚ С„РёРЅР°Р»СЊРЅСѓСЋ СЃС‚РѕРёРјРѕСЃС‚СЊ Р·Р°РєР°Р·Р° РїРѕСЃР»Рµ РІСЃРµС… РІС‹С‡РёСЃР»РµРЅРёР№.",
         ),
-        "demo_shop.logic.validate_stock": (
-            "Проверка складских остатков",
-            "Сравнивает запрошенное количество с доступным остатком и останавливает оформление заказа при дефиците товара.",
+        "logic.validate_stock": (
+            "РџСЂРѕРІРµСЂРєР° СЃРєР»Р°РґСЃРєРёС… РѕСЃС‚Р°С‚РєРѕРІ",
+            "РЎСЂР°РІРЅРёРІР°РµС‚ Р·Р°РїСЂРѕС€РµРЅРЅРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ СЃ РґРѕСЃС‚СѓРїРЅС‹Рј РѕСЃС‚Р°С‚РєРѕРј Рё РѕСЃС‚Р°РЅР°РІР»РёРІР°РµС‚ РѕС„РѕСЂРјР»РµРЅРёРµ Р·Р°РєР°Р·Р° РїСЂРё РґРµС„РёС†РёС‚Рµ С‚РѕРІР°СЂР°.",
         ),
-        "demo_shop.models.normalize_money": (
-            "Нормализация денежного значения",
-            "Приводит денежные значения к единому формату округления, чтобы расчёты заказа были детерминированными.",
+        "models.normalize_money": (
+            "РќРѕСЂРјР°Р»РёР·Р°С†РёСЏ РґРµРЅРµР¶РЅРѕРіРѕ Р·РЅР°С‡РµРЅРёСЏ",
+            "РџСЂРёРІРѕРґРёС‚ РґРµРЅРµР¶РЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ Рє РµРґРёРЅРѕРјСѓ С„РѕСЂРјР°С‚Сѓ РѕРєСЂСѓРіР»РµРЅРёСЏ, С‡С‚РѕР±С‹ СЂР°СЃС‡С‘С‚С‹ Р·Р°РєР°Р·Р° Р±С‹Р»Рё РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹РјРё.",
         ),
-        "demo_shop.models.Product.validate_unit_price": (
-            "Валидация цены товара",
-            "Проверяет и нормализует цену товара при создании доменной модели продукта.",
+        "models.Product.validate_unit_price": (
+            "Р’Р°Р»РёРґР°С†РёСЏ С†РµРЅС‹ С‚РѕРІР°СЂР°",
+            "РџСЂРѕРІРµСЂСЏРµС‚ Рё РЅРѕСЂРјР°Р»РёР·СѓРµС‚ С†РµРЅСѓ С‚РѕРІР°СЂР° РїСЂРё СЃРѕР·РґР°РЅРёРё РґРѕРјРµРЅРЅРѕР№ РјРѕРґРµР»Рё РїСЂРѕРґСѓРєС‚Р°.",
         ),
-        "demo_shop.models.OrderCreateRequest.validate_email": (
-            "Проверка email покупателя",
-            "Проводит базовую проверку и нормализацию email, который приходит в запросе на создание заказа.",
+        "models.OrderCreateRequest.validate_email": (
+            "РџСЂРѕРІРµСЂРєР° email РїРѕРєСѓРїР°С‚РµР»СЏ",
+            "РџСЂРѕРІРѕРґРёС‚ Р±Р°Р·РѕРІСѓСЋ РїСЂРѕРІРµСЂРєСѓ Рё РЅРѕСЂРјР°Р»РёР·Р°С†РёСЋ email, РєРѕС‚РѕСЂС‹Р№ РїСЂРёС…РѕРґРёС‚ РІ Р·Р°РїСЂРѕСЃРµ РЅР° СЃРѕР·РґР°РЅРёРµ Р·Р°РєР°Р·Р°.",
         ),
-        "demo_shop.models.OrderLineResult.validate_money": (
-            "Проверка суммы строки результата",
-            "Нормализует денежную сумму отдельной строки заказа перед возвратом результата пользователю.",
+        "models.OrderLineResult.validate_money": (
+            "РџСЂРѕРІРµСЂРєР° СЃСѓРјРјС‹ СЃС‚СЂРѕРєРё СЂРµР·СѓР»СЊС‚Р°С‚Р°",
+            "РќРѕСЂРјР°Р»РёР·СѓРµС‚ РґРµРЅРµР¶РЅСѓСЋ СЃСѓРјРјСѓ РѕС‚РґРµР»СЊРЅРѕР№ СЃС‚СЂРѕРєРё Р·Р°РєР°Р·Р° РїРµСЂРµРґ РІРѕР·РІСЂР°С‚РѕРј СЂРµР·СѓР»СЊС‚Р°С‚Р° РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ.",
         ),
-        "demo_shop.models.OrderResult.validate_money": (
-            "Проверка итоговой суммы результата",
-            "Приводит итоговую стоимость заказа к единому денежному формату перед публикацией результата.",
+        "models.OrderResult.validate_money": (
+            "РџСЂРѕРІРµСЂРєР° РёС‚РѕРіРѕРІРѕР№ СЃСѓРјРјС‹ СЂРµР·СѓР»СЊС‚Р°С‚Р°",
+            "РџСЂРёРІРѕРґРёС‚ РёС‚РѕРіРѕРІСѓСЋ СЃС‚РѕРёРјРѕСЃС‚СЊ Р·Р°РєР°Р·Р° Рє РµРґРёРЅРѕРјСѓ РґРµРЅРµР¶РЅРѕРјСѓ С„РѕСЂРјР°С‚Сѓ РїРµСЂРµРґ РїСѓР±Р»РёРєР°С†РёРµР№ СЂРµР·СѓР»СЊС‚Р°С‚Р°.",
         ),
-        "demo_shop.service.create_order": (
-            "Оформление заказа",
-            "Читает товары из базы, проверяет остатки, рассчитывает суммы и сохраняет итоговый заказ в PostgreSQL.",
+        "service.create_order": (
+            "РћС„РѕСЂРјР»РµРЅРёРµ Р·Р°РєР°Р·Р°",
+            "Р§РёС‚Р°РµС‚ С‚РѕРІР°СЂС‹ РёР· Р±Р°Р·С‹, РїСЂРѕРІРµСЂСЏРµС‚ РѕСЃС‚Р°С‚РєРё, СЂР°СЃСЃС‡РёС‚С‹РІР°РµС‚ СЃСѓРјРјС‹ Рё СЃРѕС…СЂР°РЅСЏРµС‚ РёС‚РѕРіРѕРІС‹Р№ Р·Р°РєР°Р· РІ PostgreSQL.",
         ),
     }
 
@@ -136,18 +139,20 @@ class AnalyzerEngine(IAnalyzer):
         if not resolved_path.is_file():
             raise FileNotFoundError(f"Python file not found: {resolved_path}")
 
-        module_root = self.project_root or resolved_root
+        project_root = self.project_root or resolved_root
+        module_root = detect_source_root(resolved_path, project_root)
         module_analysis = self._analyze_module(
             file_path=resolved_path,
             module_root=module_root,
         )
         project = ProjectMetadata(
-            project_name=module_root.name,
+            project_name=resolved_root.name,
             root_path=resolved_root,
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
             imports=module_analysis.imports,
             source_roots=(module_root,),
             analyzed_files=(resolved_path,),
+            analysis_warnings=module_analysis.warnings,
         )
         return AnalysisResult(
             project=project,
@@ -160,7 +165,8 @@ class AnalyzerEngine(IAnalyzer):
         if not resolved_path.is_file():
             raise FileNotFoundError(f"Python file not found: {resolved_path}")
 
-        module_root = self.project_root or resolved_path.parent
+        project_root = self.project_root or resolved_path.parent
+        module_root = detect_source_root(resolved_path, project_root)
         return self._analyze_module(
             file_path=resolved_path,
             module_root=module_root,
@@ -171,26 +177,31 @@ class AnalyzerEngine(IAnalyzer):
         if not resolved_root.is_dir():
             raise NotADirectoryError(f"Project root not found: {resolved_root}")
 
-        module_root = self.project_root or resolved_root
+        project_root = self.project_root or resolved_root
         analyzed_files = tuple(self._iter_python_files(resolved_root))
+        source_roots = collect_source_roots(analyzed_files, project_root) or (project_root,)
         discovered_functions: list[FunctionSchema] = []
         discovered_imports: list[str] = []
+        analysis_warnings: list[AnalysisWarningSchema] = []
 
         for file_path in analyzed_files:
+            module_root = detect_source_root(file_path, project_root)
             module_analysis = self._analyze_module(
                 file_path=file_path,
                 module_root=module_root,
             )
             discovered_imports.extend(module_analysis.imports)
             discovered_functions.extend(module_analysis.functions)
+            analysis_warnings.extend(module_analysis.warnings)
 
         project = ProjectMetadata(
-            project_name=module_root.name,
+            project_name=resolved_root.name,
             root_path=resolved_root,
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
             imports=self._deduplicate(discovered_imports),
-            source_roots=(module_root,),
+            source_roots=source_roots,
             analyzed_files=analyzed_files,
+            analysis_warnings=tuple(analysis_warnings),
         )
         functions_tuple = tuple(discovered_functions)
         return AnalysisResult(
@@ -205,8 +216,34 @@ class AnalyzerEngine(IAnalyzer):
         file_path: Path,
         module_root: Path,
     ) -> ModuleAnalysis:
-        source = read_python_source(file_path)
-        tree = ast.parse(source, filename=str(file_path))
+        try:
+            source = read_python_source(file_path)
+            tree = ast.parse(source, filename=str(file_path))
+        except SyntaxError as error:
+            return ModuleAnalysis(
+                imports=[],
+                functions=(),
+                warnings=(
+                    AnalysisWarningSchema(
+                        file_path=file_path,
+                        kind="syntax_error",
+                        details=error.msg,
+                        line_number=error.lineno or None,
+                    ),
+                ),
+            )
+        except OSError as error:
+            return ModuleAnalysis(
+                imports=[],
+                functions=(),
+                warnings=(
+                    AnalysisWarningSchema(
+                        file_path=file_path,
+                        kind="read_error",
+                        details=str(error),
+                    ),
+                ),
+            )
 
         imports_visitor = ImportsVisitor(
             file_path=file_path,
@@ -236,6 +273,7 @@ class AnalyzerEngine(IAnalyzer):
         return ModuleAnalysis(
             imports=imports_visitor.as_list(),
             functions=functions,
+            warnings=(),
         )
 
     def _iter_python_files(self, root_path: Path) -> list[Path]:
@@ -284,120 +322,126 @@ class AnalyzerEngine(IAnalyzer):
 
     @classmethod
     def _localized_function_name(cls, function: FunctionSchema) -> str:
-        label = cls._function_label(function)
-        if label in cls.SPECIAL_CONTEXT_RU:
-            return cls.SPECIAL_CONTEXT_RU[label][0]
+        context_label = cls._context_label(function)
+        if context_label in cls.SPECIAL_CONTEXT_RU:
+            return repair_text(cls.SPECIAL_CONTEXT_RU[context_label][0])
 
-        return cls._verb_phrase_ru(function.name)
+        return repair_text(cls._verb_phrase_ru(function.name))
 
     @classmethod
     def _localized_function_description(cls, function: FunctionSchema) -> str:
-        label = cls._function_label(function)
-        if label in cls.SPECIAL_CONTEXT_RU:
-            return cls.SPECIAL_CONTEXT_RU[label][1]
+        context_label = cls._context_label(function)
+        if context_label in cls.SPECIAL_CONTEXT_RU:
+            return repair_text(cls.SPECIAL_CONTEXT_RU[context_label][1])
 
         module_label = cls._module_label_ru(function.module) or function.module
         action = cls._verb_phrase_ru(function.name).lower()
         method_part = (
-            f" как метод класса {function.class_name}"
+            f" РєР°Рє РјРµС‚РѕРґ РєР»Р°СЃСЃР° {function.class_name}"
             if function.class_name is not None
             else ""
         )
-        return (
-            f"Функция {function.qualname} внутри модуля {module_label}"
-            f"{method_part} выполняет операцию: {action}."
+        return repair_text(
+            f"Р¤СѓРЅРєС†РёСЏ {function.qualname} РІРЅСѓС‚СЂРё РјРѕРґСѓР»СЏ {module_label}"
+            f"{method_part} РІС‹РїРѕР»РЅСЏРµС‚ РѕРїРµСЂР°С†РёСЋ: {action}."
         )
 
     @classmethod
     def _module_label_ru(cls, module_name: str) -> str | None:
         tail = module_name.split(".")[-1]
-        return cls.MODULE_LABELS_RU.get(tail)
+        label = cls.MODULE_LABELS_RU.get(tail)
+        return repair_text(label) if label is not None else None
 
     @staticmethod
     def _function_label(function: FunctionSchema) -> str:
         return f"{function.module}.{function.qualname}"
 
     @staticmethod
+    def _context_label(function: FunctionSchema) -> str:
+        return f"{function.module.split('.')[-1]}.{function.qualname}"
+
+    @staticmethod
     def _verb_phrase_ru(identifier: str) -> str:
         tokens = [part for part in identifier.replace("__", "_").split("_") if part]
         if not tokens:
-            return "Выполняет служебную операцию"
+            return repair_text("Р’С‹РїРѕР»РЅСЏРµС‚ СЃР»СѓР¶РµР±РЅСѓСЋ РѕРїРµСЂР°С†РёСЋ")
 
         dictionary = {
-            "analyze": "Анализирует",
-            "apply": "Применяет",
-            "attach": "Присоединяет",
-            "build": "Строит",
-            "calculate": "Рассчитывает",
-            "collect": "Собирает",
-            "configure": "Настраивает",
-            "create": "Создаёт",
-            "derive": "Определяет",
-            "detect": "Обнаруживает",
-            "enrich": "Обогащает",
-            "extract": "Извлекает",
-            "generate": "Генерирует",
-            "inspect": "Проверяет",
-            "load": "Загружает",
-            "normalize": "Нормализует",
-            "parse": "Разбирает",
-            "render": "Отрисовывает",
-            "resolve": "Разрешает",
-            "run": "Запускает",
-            "sanitize": "Очищает",
-            "serialize": "Сериализует",
-            "summarize": "Суммирует",
-            "update": "Обновляет",
-            "validate": "Проверяет",
-            "visit": "Обходит",
-            "wait": "Ожидает",
-            "write": "Записывает",
+            "analyze": "РђРЅР°Р»РёР·РёСЂСѓРµС‚",
+            "apply": "РџСЂРёРјРµРЅСЏРµС‚",
+            "attach": "РџСЂРёСЃРѕРµРґРёРЅСЏРµС‚",
+            "build": "РЎС‚СЂРѕРёС‚",
+            "calculate": "Р Р°СЃСЃС‡РёС‚С‹РІР°РµС‚",
+            "collect": "РЎРѕР±РёСЂР°РµС‚",
+            "configure": "РќР°СЃС‚СЂР°РёРІР°РµС‚",
+            "create": "РЎРѕР·РґР°С‘С‚",
+            "derive": "РћРїСЂРµРґРµР»СЏРµС‚",
+            "detect": "РћР±РЅР°СЂСѓР¶РёРІР°РµС‚",
+            "enrich": "РћР±РѕРіР°С‰Р°РµС‚",
+            "extract": "РР·РІР»РµРєР°РµС‚",
+            "generate": "Р“РµРЅРµСЂРёСЂСѓРµС‚",
+            "inspect": "РџСЂРѕРІРµСЂСЏРµС‚",
+            "load": "Р—Р°РіСЂСѓР¶Р°РµС‚",
+            "normalize": "РќРѕСЂРјР°Р»РёР·СѓРµС‚",
+            "parse": "Р Р°Р·Р±РёСЂР°РµС‚",
+            "render": "РћС‚СЂРёСЃРѕРІС‹РІР°РµС‚",
+            "resolve": "Р Р°Р·СЂРµС€Р°РµС‚",
+            "run": "Р—Р°РїСѓСЃРєР°РµС‚",
+            "sanitize": "РћС‡РёС‰Р°РµС‚",
+            "serialize": "РЎРµСЂРёР°Р»РёР·СѓРµС‚",
+            "summarize": "РЎСѓРјРјРёСЂСѓРµС‚",
+            "update": "РћР±РЅРѕРІР»СЏРµС‚",
+            "validate": "РџСЂРѕРІРµСЂСЏРµС‚",
+            "visit": "РћР±С…РѕРґРёС‚",
+            "wait": "РћР¶РёРґР°РµС‚",
+            "write": "Р—Р°РїРёСЃС‹РІР°РµС‚",
         }
         subject_dictionary = {
-            "analysis": "контур анализа",
-            "artifact": "артефакт",
-            "async": "асинхронный сценарий",
-            "call": "вызовы",
-            "compose": "compose-конфигурацию",
-            "config": "конфигурацию",
-            "context": "контекст",
-            "coverage": "покрытие",
-            "dashboard": "дашборд",
-            "database": "подключение к базе данных",
-            "dependency": "зависимости",
-            "discount": "скидку",
-            "engine": "движок",
-            "file": "файл",
-            "graph": "граф",
-            "heatmap": "карту нагрева",
-            "import": "импорты",
-            "infra": "инфраструктуру",
-            "log": "журнал",
-            "metadata": "метаданные",
-            "mock": "моки",
-            "module": "модуль",
-            "money": "денежное значение",
-            "node": "узел",
-            "order": "заказ",
-            "path": "путь",
-            "price": "цену",
-            "project": "проект",
-            "readiness": "готовность",
-            "report": "отчёт",
-            "result": "результат",
-            "service": "сервисный сценарий",
-            "session": "сессию",
-            "stock": "остатки",
-            "suite": "набор тестов",
-            "test": "тест",
-            "total": "итоговую сумму",
-            "url": "адрес подключения",
-            "visitor": "AST-обход",
+            "analysis": "РєРѕРЅС‚СѓСЂ Р°РЅР°Р»РёР·Р°",
+            "artifact": "Р°СЂС‚РµС„Р°РєС‚",
+            "async": "Р°СЃРёРЅС…СЂРѕРЅРЅС‹Р№ СЃС†РµРЅР°СЂРёР№",
+            "call": "РІС‹Р·РѕРІС‹",
+            "compose": "compose-РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ",
+            "config": "РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ",
+            "context": "РєРѕРЅС‚РµРєСЃС‚",
+            "coverage": "РїРѕРєСЂС‹С‚РёРµ",
+            "dashboard": "РґР°С€Р±РѕСЂРґ",
+            "database": "РїРѕРґРєР»СЋС‡РµРЅРёРµ Рє Р±Р°Р·Рµ РґР°РЅРЅС‹С…",
+            "dependency": "Р·Р°РІРёСЃРёРјРѕСЃС‚Рё",
+            "discount": "СЃРєРёРґРєСѓ",
+            "engine": "РґРІРёР¶РѕРє",
+            "file": "С„Р°Р№Р»",
+            "graph": "РіСЂР°С„",
+            "heatmap": "РєР°СЂС‚Сѓ РЅР°РіСЂРµРІР°",
+            "import": "РёРјРїРѕСЂС‚С‹",
+            "infra": "РёРЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂСѓ",
+            "log": "Р¶СѓСЂРЅР°Р»",
+            "metadata": "РјРµС‚Р°РґР°РЅРЅС‹Рµ",
+            "mock": "РјРѕРєРё",
+            "module": "РјРѕРґСѓР»СЊ",
+            "money": "РґРµРЅРµР¶РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ",
+            "node": "СѓР·РµР»",
+            "order": "Р·Р°РєР°Р·",
+            "path": "РїСѓС‚СЊ",
+            "price": "С†РµРЅСѓ",
+            "project": "РїСЂРѕРµРєС‚",
+            "readiness": "РіРѕС‚РѕРІРЅРѕСЃС‚СЊ",
+            "report": "РѕС‚С‡С‘С‚",
+            "result": "СЂРµР·СѓР»СЊС‚Р°С‚",
+            "service": "СЃРµСЂРІРёСЃРЅС‹Р№ СЃС†РµРЅР°СЂРёР№",
+            "session": "СЃРµСЃСЃРёСЋ",
+            "stock": "РѕСЃС‚Р°С‚РєРё",
+            "suite": "РЅР°Р±РѕСЂ С‚РµСЃС‚РѕРІ",
+            "test": "С‚РµСЃС‚",
+            "total": "РёС‚РѕРіРѕРІСѓСЋ СЃСѓРјРјСѓ",
+            "url": "Р°РґСЂРµСЃ РїРѕРґРєР»СЋС‡РµРЅРёСЏ",
+            "visitor": "AST-РѕР±С…РѕРґ",
         }
 
-        verb = dictionary.get(tokens[0], "Выполняет")
+        verb = dictionary.get(tokens[0], "Р’С‹РїРѕР»РЅСЏРµС‚")
         subject_words = [subject_dictionary.get(token, token.replace(".", " ")) for token in tokens[1:]]
         subject = " ".join(subject_words).strip()
         if not subject:
-            return f"{verb} операцию"
-        return f"{verb} {subject}"
+            return repair_text(f"{verb} РѕРїРµСЂР°С†РёСЋ")
+        return repair_text(f"{verb} {subject}")
+

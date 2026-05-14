@@ -21,9 +21,10 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.text import Text
 
 from engine.analyzer.engine import AnalyzerEngine
-from engine.core.i18n import LanguageCode, resolve_language, tr
+from engine.core.i18n import LanguageCode, repair_text, resolve_language, tr
 from engine.core.models import (
     AnalysisResult,
+    AnalysisWarningSchema,
     CoverageEntry,
     GeneratedTestPlan,
     GeneratorConfig,
@@ -33,6 +34,7 @@ from engine.core.models import (
 )
 from engine.generator.engine import GeneratorEngine
 from engine.infra.manager import InfraManager
+from engine.parser import derive_module_name, detect_source_root, read_python_source
 from engine.visualizer.renderer import VisualReportRenderer
 
 
@@ -53,7 +55,7 @@ BANNER_SUBTITLE = (
 )
 IS_WINDOWS = sys.platform.startswith("win")
 DOCKER_DESKTOP_CANDIDATES = (
-    Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
+    Path("C:/Program Files/Docker/Docker/Docker Desktop.exe"),
     Path.home() / "AppData" / "Local" / "Docker" / "Docker Desktop.exe",
 )
 DOCKER_DAEMON_TIMEOUT_SECONDS = 180
@@ -131,6 +133,10 @@ class CliSettings:
     report_retention_days: int
 
 
+class NoAnalyzableFilesError(RuntimeError):
+    """Raised when the project does not contain analyzable Python source files."""
+
+
 def detect_requested_language(argv: Sequence[str]) -> LanguageCode:
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--lang", choices=["ru", "en"], default=None)
@@ -139,7 +145,7 @@ def detect_requested_language(argv: Sequence[str]) -> LanguageCode:
 
 
 def localized_text(language: LanguageCode, *, en: str, ru: str) -> str:
-    return ru if language == "ru" else en
+    return repair_text(ru) if language == "ru" else repair_text(en)
 
 
 def build_parser(lang: LanguageCode) -> argparse.ArgumentParser:
@@ -304,6 +310,15 @@ def main() -> int:
             report_retention_days=settings.report_retention_days,
             lang=lang,
         )
+    except NoAnalyzableFilesError as error:
+        console.print(
+            Panel(
+                Text(str(error), style="bold yellow"),
+                title=f"[bold white] {BRAND_NAME} [/bold white]",
+                border_style="yellow",
+            )
+        )
+        return 0
     except Exception as error:
         console.print(
             Panel(
@@ -318,6 +333,7 @@ def main() -> int:
     if settings.run_tests and outcome.execution_result is not None:
         exit_code = outcome.execution_result.exit_code
 
+    render_analysis_warnings(console, outcome.analysis.project.analysis_warnings, lang)
     render_final_status(
         console,
         outcome=outcome,
@@ -492,14 +508,66 @@ def run_analysis(
 ) -> tuple[Path, AnalysisResult]:
     if input_path.is_dir():
         analysis_result = analyzer.analyze_project(input_path)
+        ensure_analysis_is_not_empty(analysis_result, lang)
         return input_path, analysis_result
 
     if input_path.is_file() and input_path.suffix == ".py":
-        project_root = input_path.parent
+        project_root = infer_project_root_from_file(input_path)
         analysis_result = analyzer.analyze(project_root, input_path)
+        ensure_analysis_is_not_empty(analysis_result, lang)
         return project_root, analysis_result
 
     raise FileNotFoundError(tr(lang, "terminal.errors.unsupported_path", path=input_path))
+
+
+def infer_project_root_from_file(file_path: Path) -> Path:
+    resolved_path = file_path.resolve()
+    for ancestor in resolved_path.parents:
+        if ancestor.name == "src":
+            return ancestor.parent.resolve()
+
+    package_root = resolved_path.parent
+    while (package_root / "__init__.py").exists() and package_root.parent != package_root:
+        package_root = package_root.parent
+    return package_root.resolve()
+
+
+def ensure_analysis_is_not_empty(analysis_result: AnalysisResult, lang: LanguageCode) -> None:
+    if not analysis_result.project.analyzed_files:
+        raise NoAnalyzableFilesError(tr(lang, "terminal.errors.no_files_found"))
+
+    if analysis_result.functions:
+        return
+
+    if all(not read_python_source(path).strip() for path in analysis_result.project.analyzed_files):
+        raise NoAnalyzableFilesError(tr(lang, "terminal.errors.no_files_found"))
+
+
+def render_analysis_warnings(
+    console: Console,
+    warnings: Sequence[AnalysisWarningSchema],
+    lang: LanguageCode,
+) -> None:
+    if not warnings:
+        return
+
+    body = "\n".join(
+        tr(
+            lang,
+            f"terminal.warnings.{warning.kind}",
+            path=warning.file_path,
+            line=warning.line_number or "?",
+            details=warning.details or tr(lang, "shared.common.none"),
+        )
+        for warning in warnings
+    )
+    console.print(
+        Panel(
+            Text(body, style="bold yellow"),
+            title=f"[bold yellow]{tr(lang, 'terminal.warnings.title')}[/bold yellow]",
+            border_style="yellow",
+        )
+    )
 
 
 def ensure_artifacts_directory(project_root: Path) -> Path:
@@ -1023,6 +1091,13 @@ def render_final_status(
         tr(lang, "terminal.final.mode", value=mode_display),
         tr(lang, "terminal.final.real_db", value=real_db_display),
         tr(lang, "terminal.final.infrastructure", infra=infra_display, score=readiness_score),
+        tr(lang, "terminal.final.files_found", count=len(outcome.analysis.project.analyzed_files)),
+        tr(
+            lang,
+            "terminal.final.functions_covered",
+            covered=len(outcome.suite_plan),
+            total=len(outcome.analysis.functions),
+        ),
         tests_line,
         report_line,
     ]
@@ -1086,7 +1161,8 @@ def build_infra_score(required_infra: Sequence[str], runtime_status: Mapping[str
 def build_test_output_path(project_root: Path, input_path: Path) -> Path:
     tests_directory = project_root / "tests"
     if input_path.is_file():
-        suite_name = input_path.stem
+        module_root = detect_source_root(input_path, project_root)
+        suite_name = sanitize_name(derive_module_name(input_path, module_root).replace(".", "_"))
     else:
         suite_name = f"{sanitize_name(project_root.name)}_generated"
     return tests_directory / f"test_{suite_name}.py"

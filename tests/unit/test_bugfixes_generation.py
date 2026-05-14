@@ -118,3 +118,54 @@ def test_generated_suite_auto_mocks_requests_calls(tmp_path) -> None:
     completed = _run_generated_suite(tmp_path, generated_suite)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_analyzer_tolerates_missing_installed_dependencies(tmp_path) -> None:
+    (tmp_path / "resilient_module.py").write_text(
+        "\n".join(
+            [
+                "import unknown_lib",
+                "",
+                "def fallback_value() -> str:",
+                '    return "ok"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    analysis = AnalyzerEngine().analyze_project(tmp_path)
+
+    assert analysis.project.imports == ["unknown_lib"]
+    assert [function.qualname for function in analysis.functions] == ["fallback_value"]
+
+
+def test_generated_suite_executes_for_async_decorated_functions_without_type_hints(tmp_path) -> None:
+    (tmp_path / "modern_module.py").write_text(
+        "\n".join(
+            [
+                "def passthrough(func):",
+                "    async def wrapper(*args, **kwargs):",
+                "        return await func(*args, **kwargs)",
+                "    return wrapper",
+                "",
+                "@passthrough",
+                "async def greet(raw):",
+                "    return raw",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    analyzer = AnalyzerEngine()
+    generator = GeneratorEngine()
+    analysis = analyzer.analyze_project(tmp_path)
+    generated_suite = generator.generate(analysis, tmp_path / "tests" / "test_generated_suite.py")
+    suite_text = generated_suite.read_text(encoding="utf-8")
+
+    assert "generated_str" in suite_text
+
+    completed = _run_generated_suite(tmp_path, generated_suite)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr

@@ -1,4 +1,4 @@
-"""Auto-generated integration tests for demo_shop.service."""
+"""Sample-project integration checks for the bundled service layer."""
 
 from __future__ import annotations
 
@@ -8,9 +8,19 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from demo_shop.database import OrderItemRecord, OrderRecord, ProductRecord
-from demo_shop.models import OrderCreateRequest, OrderItemRequest
-from demo_shop.service import create_order
+from tests.support.sample_project import load_sample_module
+
+
+database_module = load_sample_module("database")
+models_module = load_sample_module("models")
+service_module = load_sample_module("service")
+
+OrderItemRecord = database_module.OrderItemRecord
+OrderRecord = database_module.OrderRecord
+ProductRecord = database_module.ProductRecord
+OrderCreateRequest = models_module.OrderCreateRequest
+OrderItemRequest = models_module.OrderItemRequest
+create_order = service_module.create_order
 
 
 @pytest.mark.asyncio

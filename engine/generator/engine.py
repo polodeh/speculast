@@ -129,8 +129,11 @@ class GeneratorEngine(IGenerator):
         )
         return {
             "project": project,
+            "project_root_path": project.root_path.as_posix(),
+            "project_source_roots": [path.as_posix() for path in project.source_roots],
             "use_real_db": self.config.use_real_db,
             "modules": module_members,
+            "module_imports": self._build_module_imports(module_members),
             "functions": serialized_functions,
             "has_db_bound_functions": has_db_bound_functions,
             "has_mock_targets": any(bool(item["mock_targets"]) for item in serialized_functions),
@@ -228,6 +231,39 @@ class GeneratorEngine(IGenerator):
                 candidate_modules.append(module_name)
 
         return list(dict.fromkeys(candidate_modules))
+
+    @staticmethod
+    def _build_module_imports(module_members: Mapping[str, Sequence[str]]) -> list[dict[str, Any]]:
+        duplicate_counts: dict[str, int] = {}
+        for members in module_members.values():
+            for member in members:
+                duplicate_counts[member] = duplicate_counts.get(member, 0) + 1
+
+        rendered_imports: list[dict[str, Any]] = []
+        for module_name, members in module_members.items():
+            imports: list[dict[str, str | None]] = []
+            module_alias_prefix = module_name.replace(".", "_")
+            for member in members:
+                alias = (
+                    f"{module_alias_prefix}__{member}"
+                    if duplicate_counts.get(member, 0) > 1
+                    else None
+                )
+                rendered = f"{member} as {alias}" if alias is not None else member
+                imports.append(
+                    {
+                        "name": member,
+                        "alias": alias,
+                        "rendered": rendered,
+                    }
+                )
+            rendered_imports.append(
+                {
+                    "module": module_name,
+                    "imports": imports,
+                }
+            )
+        return rendered_imports
 
     def _is_db_bound(self, function: FunctionSchema) -> bool:
         if any(dependency.kind is DependencyKind.DATABASE for dependency in function.dependencies):

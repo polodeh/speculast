@@ -45,13 +45,17 @@ def test_generator_uses_dynamic_module_imports_for_any_project(tmp_path) -> None
     generated_suite = generator.generate(analysis, tmp_path / "tests" / "test_generated_suite.py")
     suite_text = generated_suite.read_text(encoding="utf-8")
     conftest_text = (tmp_path / "tests" / "conftest.py").read_text(encoding="utf-8")
+    legacy_brand = "demo" + "_shop"
 
     assert generated_suite.name == "test_generated_suite.py"
     assert "from calculator import add, Counter" in suite_text
     assert "from strings import shout" in suite_text
-    assert "demo_shop" not in suite_text
-    assert "PROJECT_ROOT = Path(__file__).resolve().parent.parent" in conftest_text
-    assert "sys.path.insert(0, str(PROJECT_ROOT))" in conftest_text
+    assert legacy_brand not in suite_text
+    assert "GENERATED_PROJECT_ROOT = Path(" in conftest_text
+    assert "SOURCE_ROOTS = [Path(path) for path in " in conftest_text
+    assert '(candidate for candidate in CURRENT_FILE.parents if (candidate / "tests").is_dir())' in conftest_text
+    assert "for source_root in [*SOURCE_ROOTS, PROJECT_ROOT]:" in conftest_text
+    assert "sys.path.insert(0, str(source_root))" in conftest_text
 
 
 def test_generated_suite_executes_for_a_simple_flat_project(tmp_path) -> None:

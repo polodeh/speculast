@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for demo_shop."""
+"""Shared pytest fixtures for the bundled sample project."""
 
 from __future__ import annotations
 
@@ -6,7 +6,15 @@ import asyncio
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+import pytest
+
+from tests.support.sample_project import load_sample_module
+
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = next(
+    (candidate for candidate in CURRENT_FILE.parents if (candidate / "tests").is_dir()),
+    CURRENT_FILE.parent.parent,
+)
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -18,15 +26,24 @@ import pytest_asyncio
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from demo_shop.database import Base, OrderItemRecord, OrderRecord, ProductRecord, create_engine
+database_module = load_sample_module("database")
+Base = database_module.Base
+OrderItemRecord = database_module.OrderItemRecord
+OrderRecord = database_module.OrderRecord
+ProductRecord = database_module.ProductRecord
+create_engine = database_module.create_engine
 
 
 @pytest_asyncio.fixture()
 async def db_engine() -> AsyncEngine:
     engine = create_engine()
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
-        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+    except Exception as error:
+        await engine.dispose()
+        pytest.skip(f"Sample project database is unavailable: {error}")
     try:
         yield engine
     finally:

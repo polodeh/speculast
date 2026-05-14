@@ -121,6 +121,7 @@ class ProjectMetadata(EngineModel):
     source_roots: tuple[Path, ...] = ()
     analyzed_files: tuple[Path, ...] = ()
     discovered_dependencies: tuple[DependencySchema, ...] = ()
+    analysis_warnings: tuple["AnalysisWarningSchema", ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("root_path")
@@ -223,3 +224,19 @@ class AnalysisResult(EngineModel):
     functions: tuple[FunctionSchema, ...] = ()
     required_infra: list[str] = Field(default_factory=list)
     function_context: dict[str, FunctionContextSchema] = Field(default_factory=dict)
+
+
+class AnalysisWarningSchema(EngineModel):
+    """Non-fatal issue discovered while analyzing project files."""
+
+    file_path: Path
+    kind: str = Field(min_length=1)
+    details: str | None = None
+    line_number: int | None = Field(default=None, ge=1)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_warning_path(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("warning file_path must be absolute")
+        return value

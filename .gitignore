@@ -1,0 +1,8 @@
+﻿__pycache__/
+.pytest_cache/
+.coverage
+.speculast/
+.browser-check-profile*
+.tmp_chrome_report_test/
+*.tmp*
+

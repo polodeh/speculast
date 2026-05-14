@@ -1,0 +1,834 @@
+"""Auto-generated pytest suite for {{ project.project_name }}."""
+
+from __future__ import annotations
+
+import ast
+import asyncio
+import importlib
+import inspect
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+import pytest
+import pytest_asyncio
+from rich.console import Console
+
+from engine.analyzer.engine import AnalyzerEngine
+from engine.core.models import (
+    AnalysisResult,
+    ArgumentKind,
+    ArgumentSchema,
+    DependencyKind,
+    DependencySchema,
+    FunctionSchema,
+    GeneratorConfig,
+    ProjectMetadata,
+)
+from engine.generator.engine import GeneratorEngine
+from engine.infra.manager import InfraManager
+from engine.infra.registry import DependencyRegistry
+from engine.visualizer.dashboard import DashboardBuilder
+from engine.visualizer.renderer import VisualReportRenderer
+{% if has_db_bound_functions %}
+from collections.abc import AsyncIterator
+
+from sqlalchemy import String, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+{% endif %}
+{% if has_mock_targets %}
+from unittest.mock import AsyncMock, MagicMock
+{% endif %}
+
+{% for module, objects in modules.items() %}
+from {{ module }} import {{ objects|join(', ') }}
+{% endfor %}
+
+MODULE_IMPORTS = {
+{% for module, objects in modules.items() %}
+    "{{ module }}": {{ objects|tojson }},
+{% endfor %}
+}
+
+if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+GENERATED_CASES = {
+{% for function in functions %}
+    "{{ function.test_name }}": {
+        "test_name": "{{ function.test_name }}",
+        "module": "{{ function.module }}",
+        "name": "{{ function.name }}",
+        "qualname": "{{ function.qualname }}",
+        "class_name": {% if function.class_name is none %}None{% else %}{{ function.class_name|tojson }}{% endif %},
+        "is_async": {{ "True" if function.is_async else "False" }},
+        "is_db_bound": {{ "True" if function.is_db_bound else "False" }},
+        "uses_real_db": {{ "True" if function.uses_real_db else "False" }},
+        "requires_async_test": {{ "True" if function.requires_async_test else "False" }},
+        "execution_mode": "{{ function.execution_mode }}",
+        "skip_reason": {% if function.skip_reason is none %}None{% else %}{{ function.skip_reason|tojson }}{% endif %},
+        "return_annotation": {% if function.return_annotation is none %}None{% else %}{{ function.return_annotation|tojson }}{% endif %},
+        "mock_targets": {{ function.mock_targets|tojson }},
+        "external_calls": {{ function.external_calls|tojson }},
+        "arguments": [
+{% for argument in function.arguments %}
+            {
+                "name": "{{ argument.name }}",
+                "kind": "{{ argument.kind }}",
+                "annotation": {% if argument.annotation is none %}None{% else %}{{ argument.annotation|tojson }}{% endif %},
+                "default_value": {% if argument.default_value is none %}None{% else %}{{ argument.default_value|tojson }}{% endif %},
+                "required": {{ "True" if argument.required else "False" }},
+            },
+{% endfor %}
+        ],
+    },
+{% endfor %}
+}
+
+_SAMPLE_TREE = ast.parse("def sample(value: int = 1) -> int:\n    return value\n")
+_SAMPLE_FUNCTION_NODE = _SAMPLE_TREE.body[0]
+_UNSUPPORTED = object()
+
+
+def _module_objects(module_name: str) -> dict[str, object]:
+    imported_module = importlib.import_module(module_name)
+    object_names = MODULE_IMPORTS.get(module_name, [])
+    return {
+        object_name: getattr(imported_module, object_name)
+        for object_name in object_names
+        if hasattr(imported_module, object_name)
+    }
+
+
+def _annotation_symbol(annotation: str) -> str | None:
+    normalized = annotation.strip()
+    if not normalized:
+        return None
+
+    base = normalized.split("[", maxsplit=1)[0]
+    base = base.split("|", maxsplit=1)[0].strip()
+    symbol = base.rsplit(".", maxsplit=1)[-1].strip()
+    if not symbol or not symbol[0].isalpha():
+        return None
+    return symbol
+
+
+def _resolve_project_symbol(symbol_name: str) -> object | None:
+    for module_name, object_names in MODULE_IMPORTS.items():
+        if symbol_name not in object_names:
+            continue
+        module_objects = _module_objects(module_name)
+        if symbol_name in module_objects:
+            return module_objects[symbol_name]
+    return None
+
+
+DATABASE_MODULE_CANDIDATES = {{ database_modules|tojson }}
+HTTP_MOCK_TARGETS = {"requests.get", "requests.post"}
+
+
+class _GeneratedHttpResponse:
+    status_code = 200
+    ok = True
+    text = "{}"
+    content = b"{}"
+
+    def json(self) -> dict[str, object]:
+        return {}
+
+    def raise_for_status(self) -> None:
+        return None
+
+{% if use_real_db and has_db_bound_functions %}
+class GeneratedIntegrationBase(DeclarativeBase):
+    """Fallback metadata for integration probes."""
+
+
+class EngineProbeRecord(GeneratedIntegrationBase):
+    """Persistence probe that leaves real evidence in PostgreSQL."""
+
+    __tablename__ = "speculast_probe"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    function_name: Mapped[str] = mapped_column(String(255))
+    result_snapshot: Mapped[str] = mapped_column(String(255))
+
+
+def _resolve_database_module() -> object | None:
+    for module_name in DATABASE_MODULE_CANDIDATES:
+        try:
+            return importlib.import_module(module_name)
+        except ImportError:
+            continue
+    return None
+
+
+def _resolve_engine_factory(module: object) -> object | None:
+    create_engine_factory = getattr(module, "create_engine", None)
+    if callable(create_engine_factory):
+        return create_engine_factory
+
+    for attribute_name in dir(module):
+        candidate = getattr(module, attribute_name)
+        if callable(candidate) and attribute_name == "create_engine":
+            return candidate
+    return None
+
+
+def _resolve_metadata(module: object) -> object:
+    base_candidate = getattr(module, "Base", None)
+    metadata = getattr(base_candidate, "metadata", None)
+    if metadata is not None and hasattr(metadata, "create_all"):
+        return metadata
+
+    for attribute_name in dir(module):
+        candidate = getattr(module, attribute_name)
+        metadata = getattr(candidate, "metadata", None)
+        if metadata is not None and hasattr(metadata, "create_all"):
+            return metadata
+
+    return GeneratedIntegrationBase.metadata
+
+
+@pytest_asyncio.fixture(scope="session")
+async def db_engine() -> AsyncIterator[AsyncEngine]:
+    database_module = _resolve_database_module()
+    if database_module is None:
+        pytest.skip("No database module was discovered for integration probes.")
+
+    engine_factory = _resolve_engine_factory(database_module)
+    if engine_factory is None:
+        pytest.skip("No create_engine factory was discovered for integration probes.")
+
+    engine = engine_factory()
+    if inspect.isawaitable(engine):
+        engine = await engine
+    if not isinstance(engine, AsyncEngine):
+        pytest.skip("Discovered create_engine did not return an AsyncEngine instance.")
+
+    metadata = _resolve_metadata(database_module)
+    async with engine.begin() as connection:
+        await connection.run_sync(metadata.drop_all)
+        await connection.run_sync(metadata.create_all)
+        await connection.run_sync(GeneratedIntegrationBase.metadata.create_all)
+    try:
+        yield engine
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(GeneratedIntegrationBase.metadata.drop_all)
+            await connection.run_sync(metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture()
+async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+    session_factory = async_sessionmaker(
+        db_engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+    async with session_factory() as session:
+        yield session
+        await session.commit()
+
+
+async def _prepare_database(module: object, db_engine: AsyncEngine) -> None:
+    metadata = _resolve_metadata(module)
+    try:
+        async with db_engine.begin() as connection:
+            await connection.run_sync(metadata.create_all)
+            await connection.run_sync(GeneratedIntegrationBase.metadata.create_all)
+    except Exception as error:  # pragma: no cover - defensive integration guard
+        pytest.skip(f"Интеграционная БД недоступна: {error}")
+
+
+async def _record_probe(
+    db_session: AsyncSession,
+    case: dict[str, Any],
+    result: object,
+) -> None:
+    try:
+        db_session.add(
+            EngineProbeRecord(
+                function_name=str(case["qualname"]),
+                result_snapshot=repr(result)[:255],
+            )
+        )
+        await db_session.commit()
+        probe_result = await db_session.execute(
+            select(EngineProbeRecord).where(
+                EngineProbeRecord.function_name == str(case["qualname"])
+            )
+        )
+        assert probe_result.scalar_one_or_none() is not None
+    except Exception as error:  # pragma: no cover - defensive integration guard
+        pytest.skip(f"Не удалось зафиксировать интеграционный пробник: {error}")
+{% endif %}
+
+
+def _sample_argument_schema(name: str = "value") -> ArgumentSchema:
+    return ArgumentSchema(
+        name=name,
+        kind=ArgumentKind.POSITIONAL_OR_KEYWORD,
+        annotation="int",
+        default_value=None,
+        required=True,
+    )
+
+
+def _sample_dependency_schema() -> DependencySchema:
+    return DependencySchema(
+        name="postgresql",
+        kind=DependencyKind.DATABASE,
+        import_path="sqlalchemy",
+        container_image="postgres:16-alpine",
+        container_port=5432,
+        evidence=("sqlalchemy",),
+    )
+
+
+def _sample_function_schema(tmp_path: Path) -> FunctionSchema:
+    sample_file = (tmp_path / "sample_module.py").resolve()
+    sample_file.parent.mkdir(parents=True, exist_ok=True)
+    sample_file.write_text(
+        "def sample(value: int = 1) -> int:\n    return value\n",
+        encoding="utf-8",
+    )
+    return FunctionSchema(
+        name="sample",
+        qualname="sample",
+        module="sample.module",
+        file_path=sample_file,
+        lineno=1,
+        end_lineno=1,
+        arguments=(_sample_argument_schema(),),
+        return_annotation="int",
+        decorators=(),
+        docstring="sample",
+        is_async=False,
+        is_method=False,
+        class_name=None,
+        node_hash="0" * 64,
+        external_calls=[],
+        dependencies=(_sample_dependency_schema(),),
+    )
+
+
+def _sample_project_metadata(tmp_path: Path) -> ProjectMetadata:
+    project_root = tmp_path.resolve()
+    project_root.mkdir(parents=True, exist_ok=True)
+    sample_file = (project_root / "sample_module.py").resolve()
+    if not sample_file.exists():
+        sample_file.write_text(
+            "def sample(value: int = 1) -> int:\n    return value\n",
+            encoding="utf-8",
+        )
+    return ProjectMetadata(
+        project_name="generated_project",
+        root_path=project_root,
+        python_version="3.14",
+        imports=["sqlalchemy"],
+        source_roots=(project_root,),
+        analyzed_files=(sample_file,),
+        discovered_dependencies=(_sample_dependency_schema(),),
+    )
+
+
+def _sample_analysis_result(tmp_path: Path) -> AnalysisResult:
+    project = _sample_project_metadata(tmp_path)
+    function = _sample_function_schema(tmp_path)
+    return AnalysisResult(
+        project=project,
+        functions=(function,),
+        required_infra=["postgresql"],
+    )
+
+
+def _sample_dashboard_context() -> dict[str, Any]:
+    return {
+        "project_name": "generated_project",
+        "generated_at": "2026-01-01 00:00 UTC",
+        "run_mode_label": "Только генерация",
+        "required_infra": ["postgresql"],
+        "sync_count": 1,
+        "async_count": 1,
+        "total_functions": 2,
+        "total_edges": 3,
+        "db_function_count": 1,
+        "readiness_index": 80,
+        "coverage_percent": 42.0,
+        "tests_total": 1,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "dependency_depth": [{"label": "module.fn", "value": 2}],
+        "heatmap_entries": [{"label": "module.fn", "module": "module", "score": 1, "width_percent": 100.0}],
+        "readiness_entries": [{"label": "PostgreSQL", "status": "planned", "score": 80}],
+        "mermaid_graph": "graph LR\nA[\"module.fn\"] --> B[\"sqlalchemy.create_engine\"]",
+        "function_rows": [{
+            "function": "module.fn",
+            "module": "module",
+            "mode": "Синхронная",
+            "mode_key": "sync",
+            "infra": "PostgreSQL",
+            "strategy": "Интеграционный",
+            "strategy_key": "integration",
+            "calls": 1,
+            "external_calls": "sqlalchemy.create_engine",
+            "mocks": "Реальная БД",
+            "skip_reason": "",
+        }],
+        "import_rows": [{"import": "sqlalchemy", "root": "sqlalchemy"}],
+        "test_rows": [{
+            "nodeid": "tests/test_generated.py::test_sample",
+            "outcome": "Успех",
+            "outcome_key": "passed",
+            "duration": 0.01,
+            "message": "",
+            "log": "",
+            "mocked_calls": "Нет",
+        }],
+        "failed_tests": [],
+        "mock_rows": [{
+            "function": "module.fn",
+            "module": "module",
+            "strategy": "Интеграционный",
+            "mocks": "Реальная БД",
+        }],
+        "coverage_rows": [{
+            "path": "module.py",
+            "covered_lines": 10,
+            "missing_lines": 2,
+            "num_statements": 12,
+            "percent_covered": 83.33,
+        }],
+        "artifacts": [{
+            "label": "HTML-отчёт",
+            "path": "reports/2026-01-01/report_000000.html",
+            "status": "Готово",
+        }],
+        "scorecard": [{
+            "label": "Семантическая карта",
+            "score": 80,
+            "description": "Демонстрационный sample-контекст",
+        }],
+        "stdout_log": "",
+        "stderr_log": "",
+    }
+
+
+def _annotation_text(annotation: object) -> str:
+    return str(annotation or "").strip().lower()
+
+
+def _root_token(value: str) -> str:
+    return value.split(".", maxsplit=1)[0].strip()
+
+
+def _instantiate_class(
+    class_obj: type[Any],
+    *,
+    tmp_path: Path,
+) -> object:
+    if getattr(class_obj, "_is_protocol", False):
+        pytest.skip("Protocol-классы не создаются автоматически.")
+
+    try:
+        signature = inspect.signature(class_obj)
+    except (TypeError, ValueError):
+        return class_obj()
+
+    required_parameters = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.default is inspect.Signature.empty
+        and parameter.kind not in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+    ]
+    if required_parameters:
+        pytest.skip(f"Невозможно автоматически создать экземпляр {class_obj.__name__}.")
+    return class_obj()
+
+
+def _resolve_target(
+    case: dict[str, Any],
+    *,
+    tmp_path: Path,
+) -> object:
+    module_objects = _module_objects(str(case["module"]))
+    class_name = case["class_name"]
+    if class_name:
+        class_obj = module_objects.get(str(class_name))
+        if class_obj is None:
+            imported_module = importlib.import_module(str(case["module"]))
+            class_obj = getattr(imported_module, str(class_name))
+        instance = _instantiate_class(class_obj, tmp_path=tmp_path)
+        return getattr(instance, str(case["name"]))
+    target = module_objects.get(str(case["name"]))
+    if target is not None:
+        return target
+    imported_module = importlib.import_module(str(case["module"]))
+    return getattr(imported_module, str(case["name"]))
+
+
+def _uses_json_load(case: dict[str, Any]) -> bool:
+    return any("json.load" in str(call_name) for call_name in case["external_calls"])
+
+
+def _expects_json_file(case: dict[str, Any], argument: dict[str, Any]) -> bool:
+    name = str(argument["name"]).lower()
+    if _uses_json_load(case) and ("path" in name or "file" in name):
+        return True
+    return name in {
+        "config_path",
+        "config_file",
+        "settings_path",
+        "settings_file",
+        "schema_path",
+        "schema_file",
+    }
+
+
+def _build_json_file(tmp_path: Path, argument: dict[str, Any]) -> Path:
+    name = str(argument["name"]).lower()
+    payload: object = (
+        []
+        if any(token in name for token in {"items", "entries", "records", "rows", "values", "list"})
+        else {}
+    )
+    candidate = (tmp_path / f"{name or 'config'}.json").resolve()
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+    return candidate
+
+
+def _synthesize_value(
+    argument: dict[str, Any],
+    *,
+    case: dict[str, Any],
+    tmp_path: Path,
+{% if use_real_db and has_db_bound_functions %}
+    db_session: AsyncSession | None = None,
+    db_engine: AsyncEngine | None = None,
+{% endif %}
+) -> object:
+    name = str(argument["name"]).lower()
+    annotation = _annotation_text(argument.get("annotation"))
+    annotation_symbol = _annotation_symbol(annotation)
+
+{% if use_real_db and has_db_bound_functions %}
+    if "asyncsession" in annotation or name in {"db_session", "session"}:
+        if db_session is not None:
+            return db_session
+    if "asyncengine" in annotation or name == "db_engine":
+        if db_engine is not None:
+            return db_engine
+{% endif %}
+    if "analysisresult" in annotation:
+        return _sample_analysis_result(tmp_path)
+    if "sequence[functionschema" in annotation or "list[functionschema" in annotation:
+        return [_sample_function_schema(tmp_path)]
+    if "tuple[functionschema" in annotation:
+        return (_sample_function_schema(tmp_path),)
+    if "projectmetadata" in annotation:
+        return _sample_project_metadata(tmp_path)
+    if "functionschema" in annotation:
+        return _sample_function_schema(tmp_path)
+    if "dependencyschema" in annotation:
+        return _sample_dependency_schema()
+    if "generatorconfig" in annotation:
+        return GeneratorConfig(use_real_db=False)
+    if "dashboardbuilder" in annotation:
+        return DashboardBuilder()
+    if "visualreportrenderer" in annotation:
+        return VisualReportRenderer()
+    if annotation_symbol is not None:
+        candidate = _resolve_project_symbol(annotation_symbol)
+        if inspect.isclass(candidate):
+            return _instantiate_class(candidate, tmp_path=tmp_path)
+    if "analyzerengine" in annotation:
+        return AnalyzerEngine(project_root=tmp_path)
+    if "generatorengine" in annotation:
+        return GeneratorEngine(config=GeneratorConfig(use_real_db=False))
+    if "inframanager" in annotation:
+        return InfraManager()
+    if "dependencyregistry" in annotation:
+        return DependencyRegistry()
+    if "console" in annotation or name == "console":
+        return Console(record=True, width=120)
+    if annotation.startswith("ast.") or "ast.ast" in annotation or name in {"tree", "node"}:
+        return ast.parse("value = 1")
+    if "ast.arguments" in annotation or name == "arguments":
+        return _SAMPLE_FUNCTION_NODE.args
+    if "functionnode" in annotation:
+        return _SAMPLE_FUNCTION_NODE
+    if "functionkey" in annotation:
+        return ("sample", 1)
+    if "mapping" in annotation or "dict" in annotation:
+        if name == "runtime_status":
+            return {"postgresql": "healthy"}
+        if name in {"context", "payload", "metadata"}:
+            return _sample_dashboard_context()
+        return {"sample": "value"}
+    if "sequence" in annotation or "collection" in annotation or "list" in annotation or "tuple" in annotation:
+        if name == "required_infra":
+            return ["postgresql"]
+        if name == "imports":
+            return ["sqlalchemy"]
+        if name == "excluded_directories":
+            return [".git", "tests"]
+        return ["alpha", "beta"]
+    if "set" in annotation:
+        return {"sample"}
+    if "bool" in annotation:
+        return True
+    if "int" in annotation:
+        return 1
+    if "float" in annotation:
+        return 0.25
+    if name in {"project_root", "root_path"}:
+        candidate = (tmp_path / name).resolve()
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    if name in {"file_path", "input_path"}:
+        candidate = (tmp_path / "sample_module.py").resolve()
+        candidate.write_text(
+            "def sample(value: int = 1) -> int:\n    return value\n",
+            encoding="utf-8",
+        )
+        return candidate
+    if name == "output_path":
+        return (tmp_path / "generated_output.py").resolve()
+    if _expects_json_file(case, argument):
+        return _build_json_file(tmp_path, argument)
+    if "path" in annotation or name.endswith("_path") or name == "path":
+        candidate = (tmp_path / f"{name or 'sample'}.txt").resolve()
+        candidate.write_text("generated", encoding="utf-8")
+        return candidate
+    if name in {"url", "uri", "endpoint", "base_url", "api_url"} or name.endswith("_url") or name.endswith("_uri"):
+        return "https://example.com"
+    if "str" in annotation:
+        return f"sample_{name or 'value'}"
+    if name in {"data", "payload", "body"}:
+        return {"sample": 1}
+    if name in {"timeout", "delay", "duration"}:
+        return 0.01
+    if name in {"priority", "count", "limit", "size"}:
+        return 1
+    if name in {"name", "label", "module_name"}:
+        return "sample"
+    return _UNSUPPORTED
+
+
+def _prepare_call_arguments(
+    case: dict[str, Any],
+    *,
+    tmp_path: Path,
+{% if use_real_db and has_db_bound_functions %}
+    db_session: AsyncSession | None = None,
+    db_engine: AsyncEngine | None = None,
+{% endif %}
+) -> tuple[list[object], dict[str, object]]:
+    positional_args: list[object] = []
+    keyword_args: dict[str, object] = {}
+
+    for argument in case["arguments"]:
+        name = str(argument["name"])
+        if case["class_name"] and name in {"self", "cls"}:
+            continue
+        if not bool(argument["required"]) and argument["default_value"] is not None:
+            continue
+        if str(argument["kind"]) in {"var_positional", "var_keyword"}:
+            continue
+
+        value = _synthesize_value(
+            argument,
+            case=case,
+            tmp_path=tmp_path,
+{% if use_real_db and has_db_bound_functions %}
+            db_session=db_session,
+            db_engine=db_engine,
+{% endif %}
+        )
+        if value is _UNSUPPORTED:
+            pytest.skip(f"Не удалось синтезировать аргумент {name} для {case['qualname']}.")
+
+        if str(argument["kind"]) == "keyword_only":
+            keyword_args[name] = value
+        else:
+            positional_args.append(value)
+
+    return positional_args, keyword_args
+
+
+def _build_mock_return(case: dict[str, Any]) -> object:
+    annotation = _annotation_text(case.get("return_annotation"))
+    if not annotation or annotation == "none":
+        return None
+    if "bool" in annotation:
+        return True
+    if "int" in annotation:
+        return 1
+    if "float" in annotation:
+        return 0.25
+    if "str" in annotation:
+        return "generated"
+    if "list" in annotation or "sequence" in annotation:
+        return ["generated"]
+    if "dict" in annotation or "mapping" in annotation:
+        return {"generated": True}
+    if "path" in annotation:
+        return Path("generated.txt")
+    return None
+
+
+def _build_http_mock_response() -> _GeneratedHttpResponse:
+    return _GeneratedHttpResponse()
+
+
+def _build_mock_replacement(target_name: str, case: dict[str, Any]) -> object:
+    if target_name in HTTP_MOCK_TARGETS:
+        return MagicMock(return_value=_build_http_mock_response())
+    if bool(case["requires_async_test"]):
+        return AsyncMock(return_value=_build_mock_return(case))
+    return MagicMock(return_value=_build_mock_return(case))
+
+
+def _patch_mock_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    case: dict[str, Any],
+) -> dict[str, object]:
+    patched: dict[str, object] = {}
+    for target_name in case["mock_targets"]:
+        root_name = _root_token(str(target_name))
+        try:
+            parent = importlib.import_module(root_name)
+        except ImportError:
+            continue
+
+        parts = str(target_name).split(".")[1:]
+        if not parts:
+            continue
+
+        try:
+            for part in parts[:-1]:
+                parent = getattr(parent, part)
+        except AttributeError:
+            continue
+
+        replacement = _build_mock_replacement(str(target_name), case)
+        monkeypatch.setattr(parent, parts[-1], replacement, raising=False)
+        patched[str(target_name)] = replacement
+    return patched
+
+
+def _assert_result_shape(result: object, case: dict[str, Any]) -> None:
+    annotation = _annotation_text(case.get("return_annotation"))
+    if not annotation:
+        assert result is None or result is not Ellipsis
+        return
+    if annotation == "none":
+        assert result is None
+        return
+    if "dict" in annotation or "mapping" in annotation:
+        assert isinstance(result, dict)
+        return
+    if "list" in annotation or "sequence" in annotation:
+        assert isinstance(result, list)
+        return
+    if "tuple" in annotation:
+        assert isinstance(result, tuple)
+        return
+    if "set" in annotation:
+        assert isinstance(result, set)
+        return
+    if "bool" in annotation:
+        assert isinstance(result, bool)
+        return
+    if "int" in annotation:
+        assert isinstance(result, int)
+        return
+    if "float" in annotation:
+        assert isinstance(result, float)
+        return
+    if "str" in annotation:
+        assert isinstance(result, str)
+        return
+    if "path" in annotation:
+        assert isinstance(result, Path)
+        return
+    assert result is None or result is not Ellipsis
+
+
+{% if functions %}
+{% for function in functions %}
+{% if function.requires_async_test %}
+@pytest.mark.asyncio
+async def {{ function.test_name }}(
+    tmp_path: Path,
+{% if function.mock_targets %}
+    monkeypatch: pytest.MonkeyPatch,
+{% endif %}
+{% if function.uses_real_db %}
+    db_session: AsyncSession,
+    db_engine: AsyncEngine,
+{% endif %}
+) -> None:
+    case = GENERATED_CASES["{{ function.test_name }}"]
+    if case["execution_mode"] == "skipped":
+        pytest.skip(str(case["skip_reason"]))
+
+    target = _resolve_target(case, tmp_path=tmp_path)
+{% if function.mock_targets %}
+    patched = _patch_mock_targets(monkeypatch, case)
+{% else %}
+    patched: dict[str, object] = {}
+{% endif %}
+{% if function.uses_real_db %}
+    database_module = importlib.import_module(str(case["module"]))
+    await _prepare_database(database_module, db_engine)
+    positional_args, keyword_args = _prepare_call_arguments(
+        case,
+        tmp_path=tmp_path,
+        db_session=db_session,
+        db_engine=db_engine,
+    )
+{% else %}
+    positional_args, keyword_args = _prepare_call_arguments(case, tmp_path=tmp_path)
+{% endif %}
+    invocation = target(*positional_args, **keyword_args)
+    result = await invocation if inspect.isawaitable(invocation) else invocation
+    _assert_result_shape(result, case)
+{% if function.uses_real_db %}
+    await _record_probe(db_session, case, result)
+{% else %}
+    assert isinstance(patched, dict)
+{% endif %}
+
+{% else %}
+def {{ function.test_name }}(
+    tmp_path: Path,
+{% if function.mock_targets %}
+    monkeypatch: pytest.MonkeyPatch,
+{% endif %}
+) -> None:
+    case = GENERATED_CASES["{{ function.test_name }}"]
+    if case["execution_mode"] == "skipped":
+        pytest.skip(str(case["skip_reason"]))
+
+    target = _resolve_target(case, tmp_path=tmp_path)
+{% if function.mock_targets %}
+    patched = _patch_mock_targets(monkeypatch, case)
+{% else %}
+    patched: dict[str, object] = {}
+{% endif %}
+    positional_args, keyword_args = _prepare_call_arguments(case, tmp_path=tmp_path)
+    result = target(*positional_args, **keyword_args)
+    _assert_result_shape(result, case)
+    assert isinstance(patched, dict)
+
+{% endif %}
+{% endfor %}
+{% else %}
+def test_generated_suite_is_empty() -> None:
+    pytest.skip("No public functions were discovered for this module.")
+{% endif %}

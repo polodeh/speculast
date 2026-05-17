@@ -18,5 +18,9 @@ for source_root in [*SOURCE_ROOTS, PROJECT_ROOT]:
     if source_root.exists() and str(source_root) not in sys.path:
         sys.path.insert(0, str(source_root))
 
-if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+if (
+    sys.platform.startswith("win")
+    and sys.version_info < (3, 14)
+    and hasattr(asyncio, "WindowsSelectorEventLoopPolicy")
+):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

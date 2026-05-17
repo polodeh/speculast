@@ -10,6 +10,7 @@ from main import (
     BANNER_SUBTITLE,
     NoAnalyzableFilesError,
     build_parser,
+    configure_windows_utf8_streams,
     open_generated_report,
     resolve_cli_settings,
     run_analysis,
@@ -103,3 +104,24 @@ def test_run_analysis_uses_friendly_message_for_blank_python_files(tmp_path) -> 
         match="\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u043a\u043e\u0434, \u0438 \u044f \u0432\u0435\u0440\u043d\u0443\u0441\u044c!",
     ):
         run_analysis(AnalyzerEngine(), tmp_path, "ru")
+
+
+def test_configure_windows_utf8_streams_reconfigures_stdout_and_stderr_on_win32(monkeypatch) -> None:
+    class DummyStream:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.calls.append({"encoding": encoding})
+
+    stdout = DummyStream()
+    stderr = DummyStream()
+
+    monkeypatch.setattr("main.sys.platform", "win32")
+    monkeypatch.setattr("main.sys.stdout", stdout)
+    monkeypatch.setattr("main.sys.stderr", stderr)
+
+    configure_windows_utf8_streams()
+
+    assert stdout.calls == [{"encoding": "utf-8"}]
+    assert stderr.calls == [{"encoding": "utf-8"}]

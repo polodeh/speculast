@@ -618,7 +618,17 @@ def repair_text(value: str) -> str:
     if not any(character in MOJIBAKE_HINT_CHARS for character in value) and "вЂ" not in value:
         return value
     try:
-        repaired = value.encode("cp1251").decode("utf-8")
+        reconstructed = bytearray()
+        for character in value:
+            try:
+                reconstructed.extend(character.encode("cp1251"))
+            except UnicodeEncodeError:
+                codepoint = ord(character)
+                if codepoint <= 0xFF:
+                    reconstructed.append(codepoint)
+                    continue
+                return value
+        repaired = bytes(reconstructed).decode("utf-8")
     except UnicodeError:
         return value
     return repaired

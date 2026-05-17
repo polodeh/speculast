@@ -290,6 +290,7 @@ def format_run_mode(*, run_tests: bool, generate_report: bool, lang: LanguageCod
 
 
 def main() -> int:
+    configure_windows_utf8_streams()
     configure_console()
     initial_lang = detect_requested_language(sys.argv[1:])
     args = build_parser(initial_lang).parse_args()
@@ -1169,10 +1170,17 @@ def build_test_output_path(project_root: Path, input_path: Path) -> Path:
 
 
 def configure_console() -> None:
+    configure_windows_utf8_streams()
+
+
+def configure_windows_utf8_streams() -> None:
+    if sys.platform != "win32":
+        return
+
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
-            reconfigure(encoding="utf-8", errors="replace")
+            reconfigure(encoding="utf-8")
 
 
 def sanitize_name(value: str) -> str:
@@ -1180,4 +1188,5 @@ def sanitize_name(value: str) -> str:
 
 
 if __name__ == "__main__":
+    configure_windows_utf8_streams()
     raise SystemExit(main())

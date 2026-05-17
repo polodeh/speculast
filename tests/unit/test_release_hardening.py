@@ -86,7 +86,7 @@ def test_analyzer_skips_syntax_junk_and_emits_warning(tmp_path) -> None:
     render_analysis_warnings(console, analysis.project.analysis_warnings, "ru")
     rendered = console.export_text()
 
-    assert "синтаксическая ошибка" in rendered.lower()
+    assert "\u0441\u0438\u043d\u0442\u0430\u043a\u0441\u0438\u0447\u0435\u0441\u043a\u0430\u044f \u043e\u0448\u0438\u0431\u043a\u0430" in rendered.lower()
     assert "broken.py" in rendered
 
 
@@ -124,11 +124,18 @@ def test_russian_i18n_is_readable_for_cli_and_dashboard() -> None:
     parser = build_parser("ru")
     help_text = parser.format_help()
     ui = DashboardBuilder(lang="ru")._build_ui_for("ru")
+    infrastructure_text = tr(
+        "ru",
+        "terminal.final.infrastructure",
+        infra="\u041d\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f",
+        score=100,
+    )
 
-    assert "Путь к корню Python-проекта" in tr("ru", "cli.path_help")
-    assert "Не запускать pytest" in help_text
-    assert ui["hero_tag"] == "Панель анализа проекта"
-    assert ui["sections"]["functions_title"] == "Реестр функций"
+    assert "\u041f\u0443\u0442\u044c \u043a \u043a\u043e\u0440\u043d\u044e Python-\u043f\u0440\u043e\u0435\u043a\u0442\u0430" in tr("ru", "cli.path_help")
+    assert "\u041d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0442\u044c pytest" in help_text
+    assert ui["hero_tag"] == "\u041f\u0430\u043d\u0435\u043b\u044c \u0430\u043d\u0430\u043b\u0438\u0437\u0430 \u043f\u0440\u043e\u0435\u043a\u0442\u0430"
+    assert ui["sections"]["functions_title"] == "\u0420\u0435\u0435\u0441\u0442\u0440 \u0444\u0443\u043d\u043a\u0446\u0438\u0439"
+    assert infrastructure_text == "\u0418\u043d\u0444\u0440\u0430\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430: \u041d\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f (\u0438\u043d\u0434\u0435\u043a\u0441 100%)"
 
     combined = "\n".join(
         [
@@ -136,7 +143,8 @@ def test_russian_i18n_is_readable_for_cli_and_dashboard() -> None:
             help_text,
             ui["hero_tag"],
             ui["sections"]["functions_title"],
+            infrastructure_text,
         ]
     )
-    assert "Рџ" not in combined
+    assert "\u0420\u00a0\u0421\u045f" not in combined
     assert not any(character in combined for character in MOJIBAKE_HINT_CHARS)

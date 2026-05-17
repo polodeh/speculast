@@ -52,7 +52,11 @@ MODULE_IMPORTS = {
 {% endfor %}
 }
 
-if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+if (
+    sys.platform.startswith("win")
+    and sys.version_info < (3, 14)
+    and hasattr(asyncio, "WindowsSelectorEventLoopPolicy")
+):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 GENERATED_CASES = {

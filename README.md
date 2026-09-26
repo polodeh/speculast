@@ -61,7 +61,7 @@ speculast . --no-viz --lang en
 By default, `speculast` runs in Full Auto mode:
 
 - uses the current directory when `PATH` is omitted;
-- cleans temporary root-level technical noise automatically;
+- removes the `.speculast/` cache automatically unless `--no-cleanup` is used;
 - enables real DB mode by default;
 - runs generated tests;
 - builds the HTML report;
@@ -74,10 +74,10 @@ The default full cycle performs:
 1. semantic analysis;
 2. test generation;
 3. infrastructure planning;
-4. `docker compose up -d` when services are required;
+4. `docker compose -p speculast -f .speculast/docker-compose.yaml up -d` when services are required;
 5. pytest execution with coverage and JSON reports;
 6. HTML report generation;
-7. `docker compose down --remove-orphans`.
+7. `docker compose -p speculast down --remove-orphans`.
 
 ## Template and Report Portability
 
@@ -102,7 +102,7 @@ speculast
 Expected outputs:
 
 - generated test suite under `tests/`;
-- `docker-compose.yaml` when infrastructure is required;
+- `.speculast/docker-compose.yaml` when infrastructure is required;
 - date-grouped reports such as `reports/2026-05-14/report_131530.html`.
 
 If you also want to keep raw pytest and coverage JSON artifacts:
@@ -184,6 +184,7 @@ If the pipeline should also retain raw pytest and coverage JSON files, run with 
 
 - `.speculast/pytest-report.json`
 - `.speculast/coverage.json`
+- `.speculast/coverage.db`
 
 Example GitHub Actions step:
 
@@ -238,10 +239,10 @@ So after installation, `speculast` runs the same autonomous CLI cycle exposed by
 Depending on the mode, the framework can generate:
 
 - `tests/`
-- `docker-compose.yaml`
+- `.speculast/docker-compose.yaml` when a disposable test stack is required
 - `reports/`
 
-Temporary technical artifacts such as `.speculast/`, cache folders, and browser-check profiles are removed automatically unless `--no-cleanup` is used.
+The project's own `docker-compose.yaml` is never rewritten. Temporary speculast files live only under `.speculast/` and are removed automatically unless `--no-cleanup` is used.
 
 ## Development Notes
 

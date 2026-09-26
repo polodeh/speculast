@@ -6,14 +6,17 @@ from datetime import datetime, timedelta
 import pytest
 
 from main import (
+    build_generated_test_environment,
     build_report_output_path,
     build_report_day_directory_for_timestamp,
+    build_speculast_compose_command,
     cleanup_old_reports,
     cleanup_temp_artifacts,
     ensure_report_day_directory,
     ensure_reports_directory,
     migrate_legacy_report_artifacts,
     should_cleanup_temp_artifact,
+    stop_speculast_compose_best_effort,
 )
 
 
@@ -127,55 +130,99 @@ def test_cleanup_old_reports_rejects_negative_retention_days(tmp_path) -> None:
         cleanup_old_reports(tmp_path, retention_days=-1)
 
 
-def test_should_cleanup_temp_artifact_preserves_known_config_entries(tmp_path) -> None:
-    preserved_names = (".git", ".idea", ".venv", ".gitignore", ".env")
+def test_should_cleanup_temp_artifact_only_matches_speculast_directory(tmp_path) -> None:
+    preserved_names = (
+        ".git",
+        ".github",
+        ".dockerignore",
+        ".pre-commit-config.yaml",
+        ".idea",
+        ".venv",
+        ".gitignore",
+        ".env",
+        ".coverage",
+        "__pycache__",
+        "tmp_session.log",
+    )
 
     for name in preserved_names:
         candidate = tmp_path / name
-        if "." in name[1:]:
-            candidate.write_text("keep", encoding="utf-8")
-        else:
-            candidate.mkdir(parents=True, exist_ok=True)
         assert not should_cleanup_temp_artifact(candidate)
 
+    assert should_cleanup_temp_artifact(tmp_path / ".speculast")
 
-def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
-    removable_directory = tmp_path / ".browser-check-profile"
-    removable_tmp_directory = tmp_path / ".tmp_chrome_report_test"
-    removable_cache_directory = tmp_path / "__pycache__"
-    removable_dot_file = tmp_path / ".coverage"
-    removable_tmp_file = tmp_path / "tmp_session.log"
+
+def test_cleanup_temp_artifacts_removes_only_speculast_directory(tmp_path) -> None:
     removable_artifacts_directory = tmp_path / ".speculast"
+    preserved_github = tmp_path / ".github"
+    preserved_dockerignore = tmp_path / ".dockerignore"
+    preserved_pre_commit = tmp_path / ".pre-commit-config.yaml"
+    preserved_browser_profile = tmp_path / ".browser-check-profile"
+    preserved_coverage = tmp_path / ".coverage"
+    preserved_tmp_file = tmp_path / "tmp_session.log"
     preserved_reports = tmp_path / "reports"
-    preserved_engine = tmp_path / "engine"
-    preserved_gitignore = tmp_path / ".gitignore"
+    preserved_project_compose = tmp_path / "docker-compose.yaml"
 
-    removable_directory.mkdir(parents=True, exist_ok=True)
-    removable_tmp_directory.mkdir(parents=True, exist_ok=True)
-    removable_cache_directory.mkdir(parents=True, exist_ok=True)
     removable_artifacts_directory.mkdir(parents=True, exist_ok=True)
+    (removable_artifacts_directory / "pytest-report.json").write_text("{}", encoding="utf-8")
+    preserved_github.mkdir(parents=True, exist_ok=True)
+    preserved_browser_profile.mkdir(parents=True, exist_ok=True)
     preserved_reports.mkdir(parents=True, exist_ok=True)
-    preserved_engine.mkdir(parents=True, exist_ok=True)
-    removable_dot_file.write_text("coverage", encoding="utf-8")
-    removable_tmp_file.write_text("session", encoding="utf-8")
-    preserved_gitignore.write_text("keep", encoding="utf-8")
+    preserved_dockerignore.write_text("keep", encoding="utf-8")
+    preserved_pre_commit.write_text("keep", encoding="utf-8")
+    preserved_coverage.write_text("coverage", encoding="utf-8")
+    preserved_tmp_file.write_text("session", encoding="utf-8")
+    preserved_project_compose.write_text("services: {}\n", encoding="utf-8")
 
     removed_artifacts = cleanup_temp_artifacts(tmp_path)
 
-    assert set(removed_artifacts) == {
-        removable_directory.resolve(),
-        removable_tmp_directory.resolve(),
-        removable_cache_directory.resolve(),
-        removable_dot_file.resolve(),
-        removable_tmp_file.resolve(),
-        removable_artifacts_directory.resolve(),
-    }
-    assert not removable_directory.exists()
-    assert not removable_tmp_directory.exists()
-    assert not removable_cache_directory.exists()
-    assert not removable_dot_file.exists()
-    assert not removable_tmp_file.exists()
+    assert removed_artifacts == (removable_artifacts_directory.resolve(),)
     assert not removable_artifacts_directory.exists()
+    assert preserved_github.exists()
+    assert preserved_dockerignore.exists()
+    assert preserved_pre_commit.exists()
+    assert preserved_browser_profile.exists()
+    assert preserved_coverage.exists()
+    assert preserved_tmp_file.exists()
     assert preserved_reports.exists()
-    assert preserved_engine.exists()
-    assert preserved_gitignore.exists()
+    assert preserved_project_compose.exists()
+
+
+def test_build_speculast_compose_command_can_stop_project_without_compose_file(tmp_path) -> None:
+    command = build_speculast_compose_command(tmp_path, "down", "--remove-orphans")
+
+    assert command == ["docker", "compose", "-p", "speculast", "down", "--remove-orphans"]
+
+
+def test_build_speculast_compose_command_uses_isolated_project_and_file(tmp_path) -> None:
+    compose_file = tmp_path / ".speculast" / "docker-compose.yaml"
+    compose_file.parent.mkdir(parents=True, exist_ok=True)
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+
+    command = build_speculast_compose_command(tmp_path, "up", "-d", require_compose_file=True)
+
+    assert command[:4] == ["docker", "compose", "-p", "speculast"]
+    assert command[4:6] == ["-f", str(compose_file.resolve())]
+    assert command[6:] == ["up", "-d"]
+
+
+def test_stop_speculast_compose_best_effort_skips_when_docker_is_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("main.shutil.which", lambda _name: None)
+
+    def fail_run_subprocess(*_args, **_kwargs):
+        raise AssertionError("docker must not be invoked when it is unavailable")
+
+    monkeypatch.setattr("main.run_subprocess", fail_run_subprocess)
+    stop_speculast_compose_best_effort(tmp_path)
+
+
+def test_build_generated_test_environment_points_coverage_file_at_speculast(tmp_path) -> None:
+    artifacts_root = tmp_path / ".speculast"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+
+    environment = build_generated_test_environment(artifacts_root)
+
+    assert environment["COVERAGE_FILE"] == str((artifacts_root / "coverage.db").resolve())

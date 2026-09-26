@@ -68,4 +68,4 @@ class IInfraManager(Protocol):
         """Produce a deterministic environment plan for the detected services."""
 
     def create_compose_file(self, project_root: Path, required_infra: Sequence[str], /) -> Path | None:
-        """Create a docker-compose.yaml file for the requested services."""
+        """Create speculast's isolated compose file for the requested services."""

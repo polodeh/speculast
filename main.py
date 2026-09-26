@@ -33,7 +33,15 @@ from engine.core.models import (
     TestOutcome,
 )
 from engine.generator.engine import GeneratorEngine
-from engine.infra.manager import InfraManager
+from engine.infra.manager import (
+    SPECULAST_COMPOSE_PROJECT,
+    SPECULAST_COVERAGE_DATA_FILE,
+    SPECULAST_DIRECTORY_NAME,
+    SPECULAST_PYTEST_CACHE_DIRECTORY,
+    InfraManager,
+    speculast_artifacts_path,
+    speculast_compose_path,
+)
 from engine.parser import derive_module_name, detect_source_root, read_python_source
 from engine.visualizer.renderer import VisualReportRenderer
 
@@ -77,20 +85,6 @@ REPORT_FILE_EXTENSION = ".html"
 REPORT_DIRECTORY_DATE_FORMAT = "%Y-%m-%d"
 REPORT_FILE_TIME_FORMAT = "%H%M%S"
 DEFAULT_REPORT_RETENTION_DAYS = 7
-TEMP_ARTIFACT_EXCLUDED_NAMES = frozenset(
-    {
-        ".env",
-        ".env.example",
-        ".editorconfig",
-        ".git",
-        ".gitattributes",
-        ".gitignore",
-        ".gitmodules",
-        ".idea",
-        ".python-version",
-        ".venv",
-    }
-)
 
 
 @dataclass(slots=True)
@@ -399,6 +393,7 @@ def execute_pipeline(
                 reports_directory=reports_directory,
             )
         if cleanup_temp:
+            stop_speculast_compose_best_effort(project_root)
             cleanup_temp_artifacts(project_root)
         analysis_result = infra_manager.enrich_analysis(initial_analysis)
         progress.advance(task_id)
@@ -417,10 +412,11 @@ def execute_pipeline(
         progress.advance(task_id)
 
         progress.update(task_id, description=f"[cyan]{tr(lang, 'terminal.progress.preparing_infra')}[/cyan]")
-        artifacts.compose_path = infra_manager.create_compose_file(
-            project_root,
-            analysis_result.required_infra,
-        )
+        if should_manage_infra:
+            artifacts.compose_path = infra_manager.create_compose_file(
+                project_root,
+                analysis_result.required_infra,
+            )
         progress.advance(task_id)
 
         try:
@@ -452,16 +448,20 @@ def execute_pipeline(
                 progress.advance(task_id)
 
             if cleanup_temp:
-                removed_temp_artifacts = set(cleanup_temp_artifacts(project_root))
-                if artifacts.pytest_report_path in removed_temp_artifacts:
-                    artifacts.pytest_report_path = None
-                if artifacts.coverage_path in removed_temp_artifacts:
-                    artifacts.coverage_path = None
+                if docker_cleanup_required and artifacts.compose_path is not None:
+                    run_compose_down(project_root, lang)
+                    docker_cleanup_required = False
+                else:
+                    stop_speculast_compose_best_effort(project_root)
+                cleanup_temp_artifacts(project_root)
+                artifacts.compose_path = None
+                artifacts.pytest_report_path = None
+                artifacts.coverage_path = None
                 if execution_result is not None:
                     execution_result = execution_result.model_copy(
                         update={
-                            "report_path": artifacts.pytest_report_path,
-                            "coverage_path": artifacts.coverage_path,
+                            "report_path": None,
+                            "coverage_path": None,
                         }
                     )
 
@@ -572,7 +572,7 @@ def render_analysis_warnings(
 
 
 def ensure_artifacts_directory(project_root: Path) -> Path:
-    artifacts_root = (project_root / ".speculast").resolve()
+    artifacts_root = speculast_artifacts_path(project_root)
     artifacts_root.mkdir(parents=True, exist_ok=True)
     return artifacts_root
 
@@ -694,35 +694,19 @@ def cleanup_old_reports(
 
 
 def cleanup_temp_artifacts(project_root: Path) -> tuple[Path, ...]:
-    removed_artifacts: list[Path] = []
+    artifacts_root = speculast_artifacts_path(project_root)
+    if not artifacts_root.exists() or not should_cleanup_temp_artifact(artifacts_root):
+        return ()
 
-    for candidate in sorted(project_root.iterdir(), key=lambda path: path.name.lower()):
-        if not should_cleanup_temp_artifact(candidate):
-            continue
-
-        resolved_candidate = candidate.resolve()
-        if candidate.is_dir() and not candidate.is_symlink():
-            shutil.rmtree(candidate, ignore_errors=False)
-        else:
-            candidate.unlink(missing_ok=True)
-        removed_artifacts.append(resolved_candidate)
-
-    return tuple(removed_artifacts)
+    if artifacts_root.is_dir() and not artifacts_root.is_symlink():
+        shutil.rmtree(artifacts_root, ignore_errors=False)
+    else:
+        artifacts_root.unlink(missing_ok=True)
+    return (artifacts_root,)
 
 
 def should_cleanup_temp_artifact(candidate: Path) -> bool:
-    name = candidate.name
-    lowered_name = name.lower()
-
-    if name in TEMP_ARTIFACT_EXCLUDED_NAMES:
-        return False
-    if name == "__pycache__":
-        return True
-    if "tmp" in lowered_name:
-        return True
-    if name.startswith("."):
-        return True
-    return False
+    return candidate.name == SPECULAST_DIRECTORY_NAME
 
 
 def ensure_docker_daemon(lang: LanguageCode) -> None:
@@ -763,9 +747,37 @@ def docker_daemon_status() -> tuple[bool, str]:
     return False, completed.stderr.strip() or completed.stdout.strip()
 
 
+def build_speculast_compose_command(
+    project_root: Path,
+    *compose_args: str,
+    require_compose_file: bool = False,
+) -> list[str]:
+    command = ["docker", "compose", "-p", SPECULAST_COMPOSE_PROJECT]
+    compose_file = speculast_compose_path(project_root)
+    if compose_file.is_file():
+        command.extend(["-f", str(compose_file)])
+    elif require_compose_file:
+        raise FileNotFoundError(compose_file)
+    command.extend(compose_args)
+    return command
+
+
+def stop_speculast_compose_best_effort(project_root: Path) -> None:
+    if shutil.which("docker") is None:
+        return
+    try:
+        run_subprocess(
+            build_speculast_compose_command(project_root, "down", "--remove-orphans"),
+            cwd=project_root,
+            check=False,
+        )
+    except OSError:
+        return
+
+
 def run_compose_up(project_root: Path, lang: LanguageCode) -> None:
     completed = run_subprocess(
-        ["docker", "compose", "up", "-d"],
+        build_speculast_compose_command(project_root, "up", "-d", require_compose_file=True),
         cwd=project_root,
         check=False,
     )
@@ -809,7 +821,7 @@ def wait_for_services(
 
 def inspect_service_status(project_root: Path, compose_service_name: str) -> str:
     id_result = run_subprocess(
-        ["docker", "compose", "ps", "-q", compose_service_name],
+        build_speculast_compose_command(project_root, "ps", "-q", compose_service_name),
         cwd=project_root,
         check=False,
     )
@@ -837,7 +849,7 @@ def inspect_service_status(project_root: Path, compose_service_name: str) -> str
 
 def run_compose_down(project_root: Path, lang: LanguageCode) -> None:
     completed = run_subprocess(
-        ["docker", "compose", "down", "--remove-orphans"],
+        build_speculast_compose_command(project_root, "down", "--remove-orphans"),
         cwd=project_root,
         check=False,
     )
@@ -865,13 +877,20 @@ def run_generated_tests(
         str(generated_test_path),
         "-q",
         "--disable-warnings",
+        "-o",
+        f"cache_dir={artifacts_root / SPECULAST_PYTEST_CACHE_DIRECTORY}",
         "--json-report",
         f"--json-report-file={pytest_report_path}",
         "--cov=.",
         f"--cov-report=json:{coverage_path}",
         "--cov-report=",
     ]
-    completed = run_subprocess(command, cwd=project_root, check=False)
+    completed = run_subprocess(
+        command,
+        cwd=project_root,
+        env=build_generated_test_environment(artifacts_root),
+        check=False,
+    )
 
     report_data = load_json_file(pytest_report_path)
     coverage_data = load_json_file(coverage_path)
@@ -1008,15 +1027,23 @@ def load_json_file(path: Path) -> dict[str, Any]:
         return {}
 
 
+def build_generated_test_environment(artifacts_root: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["COVERAGE_FILE"] = str((artifacts_root / SPECULAST_COVERAGE_DATA_FILE).resolve())
+    return environment
+
+
 def run_subprocess(
     command: Sequence[str],
     *,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
         cwd=str(cwd) if cwd is not None else None,
+        env=None if env is None else dict(env),
         capture_output=True,
         text=True,
         encoding="utf-8",

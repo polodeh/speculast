@@ -9,6 +9,26 @@ from ..core.models import AnalysisResult, DependencySchema
 from ..core.protocols import IInfraManager
 from .registry import DependencyRegistry
 
+SPECULAST_DIRECTORY_NAME = ".speculast"
+SPECULAST_COMPOSE_FILENAME = "docker-compose.yaml"
+SPECULAST_COMPOSE_PROJECT = "speculast"
+SPECULAST_COVERAGE_DATA_FILE = "coverage.db"
+SPECULAST_PYTEST_CACHE_DIRECTORY = "pytest_cache"
+POSTGRES_HOST_PORT = 55432
+REDIS_HOST_PORT = 56379
+
+
+def speculast_artifacts_path(project_root: Path) -> Path:
+    """Return the isolated speculast artifact directory for a project."""
+
+    return (project_root / SPECULAST_DIRECTORY_NAME).resolve()
+
+
+def speculast_compose_path(project_root: Path) -> Path:
+    """Return speculast's compose file path under the artifact directory."""
+
+    return speculast_artifacts_path(project_root) / SPECULAST_COMPOSE_FILENAME
+
 
 class InfraManager(IInfraManager):
     """Small infrastructure manager that turns imports into container requirements."""
@@ -43,14 +63,14 @@ class InfraManager(IInfraManager):
         return self.registry.plan(required_infra)
 
     def create_compose_file(self, project_root: Path, required_infra: Sequence[str], /) -> Path | None:
-        """Create docker-compose.yaml in the project root for detected services."""
+        """Create speculast's compose file under .speculast, never the project root."""
 
-        resolved_root = project_root.resolve()
         compose_content = self._build_compose_content(required_infra)
         if compose_content is None:
             return None
 
-        output_path = resolved_root / "docker-compose.yaml"
+        output_path = speculast_compose_path(project_root)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(compose_content, encoding="utf-8")
         return output_path
 
@@ -84,7 +104,7 @@ class InfraManager(IInfraManager):
                     "      POSTGRES_PASSWORD: app",
                     "      POSTGRES_HOST_AUTH_METHOD: trust",
                     "    ports:",
-                    '      - "55432:5432"',
+                    f'      - "{POSTGRES_HOST_PORT}:5432"',
                     "    healthcheck:",
                     '      test: ["CMD-SHELL", "pg_isready -U app -d app"]',
                     "      interval: 5s",
@@ -99,7 +119,7 @@ class InfraManager(IInfraManager):
                     "  cache:",
                     "    image: redis:7-alpine",
                     "    ports:",
-                    '      - "6379:6379"',
+                    f'      - "{REDIS_HOST_PORT}:6379"',
                     "    healthcheck:",
                     '      test: ["CMD", "redis-cli", "ping"]',
                     "      interval: 5s",

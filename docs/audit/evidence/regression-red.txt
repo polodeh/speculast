@@ -16,24 +16,24 @@ tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/py
         }
         for path, content in original_files.items():
             path.write_text(content, encoding="utf-8")
-    
+
         analysis = AnalyzerEngine().analyze_project(tmp_path)
         try:
             GeneratorEngine().generate(analysis, tests_root / "test_generated_suite.py")
         except FileExistsError:
             pass
-    
+
         for path, content in original_files.items():
 >           assert path.read_text(encoding="utf-8") == content
 E           assert '"""Auto-gene...ed, dict)\n\n' == 'user suite\n'
-E             
+E
 E             - user suite
 E             + """Auto-generated pytest suite for test_generator_preserves_exist0."""
-E             + 
+E             +
 E             + from __future__ import annotations
-E             + 
+E             +
 E             + import ast...
-E             
+E
 E             ...Full output truncated (619 lines hidden), use '-vv' to show
 
 tests\unit\test_safety_regressions.py:29: AssertionError
@@ -50,13 +50,13 @@ tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/py
         cache = tmp_path / "__pycache__"
         cache.mkdir()
         (cache / "important.txt").write_text("keep", encoding="utf-8")
-    
+
         cleanup_temp_artifacts(tmp_path)
-    
+
 >       assert (hidden / "important.txt").read_text(encoding="utf-8") == "keep"
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-tests\unit\test_safety_regressions.py:44: 
+tests\unit\test_safety_regressions.py:44:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 ..\..\..\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\pathlib.py:1027: in read_text
     with self.open(mode='r', encoding=encoding, errors=errors) as f:
@@ -86,19 +86,19 @@ tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/py
     def test_compose_generation_preserves_project_infrastructure(tmp_path) -> None:
         project_compose = tmp_path / "docker-compose.yaml"
         project_compose.write_text("services:\n  user: {}\n", encoding="utf-8")
-    
+
         generated = InfraManager().create_compose_file(tmp_path, ["postgresql"])
-    
+
 >       assert project_compose.read_text(encoding="utf-8") == "services:\n  user: {}\n"
 E       AssertionError: assert 'services:\n ... retries: 5\n' == 'services:\n  user: {}\n'
-E         
+E
 E           services:
 E         -   user: {}
 E         +   db:
 E         +     image: postgres:16-alpine
 E         +     environment:
 E         +       POSTGRES_DB: app...
-E         
+E
 E         ...Full output truncated (10 lines hidden), use '-vv' to show
 
 tests\unit\test_safety_regressions.py:55: AssertionError

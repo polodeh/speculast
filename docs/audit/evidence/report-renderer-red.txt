@@ -9,7 +9,7 @@ tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/py
         output = tmp_path / "report.html"
         output.write_text("user report", encoding="utf-8")
         analysis = AnalyzerEngine().analyze_project(tmp_path)
-    
+
 >       with pytest.raises(FileExistsError):
              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 E       Failed: DID NOT RAISE <class 'FileExistsError'>

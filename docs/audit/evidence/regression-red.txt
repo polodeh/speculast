@@ -1,0 +1,109 @@
+FFF                                                                      [100%]
+================================== FAILURES ===================================
+_________ test_generator_preserves_existing_project_tests_and_config __________
+
+tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/pytest-6/test_generator_preserves_exist0')
+
+    def test_generator_preserves_existing_project_tests_and_config(tmp_path) -> None:
+        (tmp_path / "module.py").write_text("def value(): return 1\n", encoding="utf-8")
+        tests_root = tmp_path / "tests"
+        (tests_root / "unit").mkdir(parents=True)
+        original_files = {
+            tests_root / "test_generated_suite.py": "user suite\n",
+            tests_root / "conftest.py": "user fixtures\n",
+            tests_root / "pyproject.toml": "user config\n",
+            tests_root / "unit" / "test_logic.py": "user regression\n",
+        }
+        for path, content in original_files.items():
+            path.write_text(content, encoding="utf-8")
+    
+        analysis = AnalyzerEngine().analyze_project(tmp_path)
+        try:
+            GeneratorEngine().generate(analysis, tests_root / "test_generated_suite.py")
+        except FileExistsError:
+            pass
+    
+        for path, content in original_files.items():
+>           assert path.read_text(encoding="utf-8") == content
+E           assert '"""Auto-gene...ed, dict)\n\n' == 'user suite\n'
+E             
+E             - user suite
+E             + """Auto-generated pytest suite for test_generator_preserves_exist0."""
+E             + 
+E             + from __future__ import annotations
+E             + 
+E             + import ast...
+E             
+E             ...Full output truncated (619 lines hidden), use '-vv' to show
+
+tests\unit\test_safety_regressions.py:29: AssertionError
+____________ test_cleanup_preserves_unowned_hidden_and_tmp_entries ____________
+
+tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/pytest-6/test_cleanup_preserves_unowned0')
+
+    def test_cleanup_preserves_unowned_hidden_and_tmp_entries(tmp_path) -> None:
+        hidden = tmp_path / ".custom-data"
+        hidden.mkdir()
+        (hidden / "important.txt").write_text("keep", encoding="utf-8")
+        temporary = tmp_path / "tmp_customer_data.txt"
+        temporary.write_text("keep", encoding="utf-8")
+        cache = tmp_path / "__pycache__"
+        cache.mkdir()
+        (cache / "important.txt").write_text("keep", encoding="utf-8")
+    
+        cleanup_temp_artifacts(tmp_path)
+    
+>       assert (hidden / "important.txt").read_text(encoding="utf-8") == "keep"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\unit\test_safety_regressions.py:44: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\..\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/pytest-6/test_cleanup_preserves_unowned0/.custom-data/important.txt')
+mode = 'r', buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\Polodeh\\AppData\\Local\\Temp\\pytest-of-Polodeh\\pytest-6\\test_cleanup_preserves_unowned0\\.custom-data\\important.txt'
+
+..\..\..\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\pathlib.py:1013: FileNotFoundError
+__________ test_compose_generation_preserves_project_infrastructure ___________
+
+tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/pytest-6/test_compose_generation_preser0')
+
+    def test_compose_generation_preserves_project_infrastructure(tmp_path) -> None:
+        project_compose = tmp_path / "docker-compose.yaml"
+        project_compose.write_text("services:\n  user: {}\n", encoding="utf-8")
+    
+        generated = InfraManager().create_compose_file(tmp_path, ["postgresql"])
+    
+>       assert project_compose.read_text(encoding="utf-8") == "services:\n  user: {}\n"
+E       AssertionError: assert 'services:\n ... retries: 5\n' == 'services:\n  user: {}\n'
+E         
+E           services:
+E         -   user: {}
+E         +   db:
+E         +     image: postgres:16-alpine
+E         +     environment:
+E         +       POSTGRES_DB: app...
+E         
+E         ...Full output truncated (10 lines hidden), use '-vv' to show
+
+tests\unit\test_safety_regressions.py:55: AssertionError
+=========================== short test summary info ===========================
+FAILED tests\unit\test_safety_regressions.py::test_generator_preserves_existing_project_tests_and_config
+FAILED tests\unit\test_safety_regressions.py::test_cleanup_preserves_unowned_hidden_and_tmp_entries
+FAILED tests\unit\test_safety_regressions.py::test_compose_generation_preserves_project_infrastructure
+3 failed in 0.33s

@@ -1,0 +1,20 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+___________________ test_renderer_preserves_existing_report ___________________
+
+tmp_path = WindowsPath('C:/Users/Polodeh/AppData/Local/Temp/pytest-of-Polodeh/pytest-27/test_renderer_preserves_existi0')
+
+    def test_renderer_preserves_existing_report(tmp_path) -> None:
+        (tmp_path / "module.py").write_text("def value(): return 1\n", encoding="utf-8")
+        output = tmp_path / "report.html"
+        output.write_text("user report", encoding="utf-8")
+        analysis = AnalyzerEngine().analyze_project(tmp_path)
+    
+>       with pytest.raises(FileExistsError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'FileExistsError'>
+
+tests\unit\test_safety_regressions.py:112: Failed
+=========================== short test summary info ===========================
+FAILED tests\unit\test_safety_regressions.py::test_renderer_preserves_existing_report
+1 failed in 0.29s

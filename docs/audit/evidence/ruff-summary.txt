@@ -1,0 +1,8 @@
+ruff check . --output-format json
+214 diagnostics
+E501: 197
+I001: 9
+E402: 3
+UP037: 2
+UP017: 2
+F401: 1

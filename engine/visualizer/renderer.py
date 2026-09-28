@@ -97,7 +97,8 @@ class VisualReportRenderer:
         )
         context["artifacts"] = self._inject_report_artifact(context["artifacts"], resolved_output)
         html = self.dashboard_builder.render(context)
-        resolved_output.write_text(html, encoding="utf-8")
+        with resolved_output.open("x", encoding="utf-8") as output_file:
+            output_file.write(html)
         return resolved_output
 
     def _build_context(

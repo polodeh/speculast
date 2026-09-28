@@ -6,13 +6,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from main import (
-    build_report_output_path,
     build_report_day_directory_for_timestamp,
+    build_report_output_path,
     cleanup_old_reports,
     cleanup_temp_artifacts,
     ensure_report_day_directory,
     ensure_reports_directory,
+    mark_owned_report,
     migrate_legacy_report_artifacts,
+    report_ownership_path,
     should_cleanup_temp_artifact,
 )
 
@@ -62,7 +64,7 @@ def test_build_report_output_path_uses_date_folder_time_name_and_suffix(tmp_path
     ).resolve()
 
 
-def test_migrate_legacy_report_artifacts_moves_root_files_into_date_folders(tmp_path) -> None:
+def test_migrate_legacy_report_artifacts_preserves_unowned_root_files(tmp_path) -> None:
     reports_directory = ensure_reports_directory(tmp_path)
     legacy_html = tmp_path / "report.html"
     legacy_png = tmp_path / "report-check-en.png"
@@ -79,16 +81,13 @@ def test_migrate_legacy_report_artifacts_moves_root_files_into_date_folders(tmp_
 
     migrated_paths = migrate_legacy_report_artifacts(tmp_path, reports_directory=reports_directory)
 
-    assert set(migrated_paths) == {
-        (tmp_path / "reports" / "2026-05-14" / "report.html").resolve(),
-        (tmp_path / "reports" / "2026-05-03" / "report-check-en.png").resolve(),
-    }
-    assert not legacy_html.exists()
-    assert not legacy_png.exists()
+    assert migrated_paths == ()
+    assert legacy_html.read_text(encoding="utf-8") == "html"
+    assert legacy_png.read_text(encoding="utf-8") == "png"
     assert untouched.exists()
 
 
-def test_cleanup_old_reports_recurses_into_date_folders_and_prunes_empty_ones(tmp_path) -> None:
+def test_cleanup_old_reports_removes_only_marked_reports(tmp_path) -> None:
     now = datetime(2026, 5, 14, 13, 15, 30)
     reports_directory = ensure_reports_directory(tmp_path)
     expired_day_directory = reports_directory / "2026-05-01"
@@ -96,27 +95,33 @@ def test_cleanup_old_reports_recurses_into_date_folders_and_prunes_empty_ones(tm
     expired_day_directory.mkdir(parents=True, exist_ok=True)
     recent_day_directory.mkdir(parents=True, exist_ok=True)
     expired_report = expired_day_directory / "report_101010.html"
+    unowned_report = expired_day_directory / "report_202020.html"
     expired_png = expired_day_directory / "report-check.png"
     recent_report = recent_day_directory / "report_101010.html"
     unrelated_file = reports_directory / "notes.txt"
 
     expired_report.write_text("old", encoding="utf-8")
+    unowned_report.write_text("user report", encoding="utf-8")
     expired_png.write_text("old-png", encoding="utf-8")
     recent_report.write_text("fresh", encoding="utf-8")
+    mark_owned_report(expired_report)
+    mark_owned_report(recent_report)
     unrelated_file.write_text("keep", encoding="utf-8")
 
     expired_timestamp = (now - timedelta(days=8)).timestamp()
     recent_timestamp = (now - timedelta(days=2)).timestamp()
     os.utime(expired_report, (expired_timestamp, expired_timestamp))
+    os.utime(unowned_report, (expired_timestamp, expired_timestamp))
     os.utime(expired_png, (expired_timestamp, expired_timestamp))
     os.utime(recent_report, (recent_timestamp, recent_timestamp))
 
     removed_reports = cleanup_old_reports(tmp_path, retention_days=7, now=now)
 
-    assert set(removed_reports) == {expired_report.resolve(), expired_png.resolve()}
+    assert set(removed_reports) == {expired_report.resolve()}
     assert not expired_report.exists()
-    assert not expired_png.exists()
-    assert not expired_day_directory.exists()
+    assert unowned_report.read_text(encoding="utf-8") == "user report"
+    assert expired_png.exists()
+    assert expired_day_directory.exists()
     assert recent_report.exists()
     assert recent_day_directory.exists()
     assert unrelated_file.exists()
@@ -125,6 +130,16 @@ def test_cleanup_old_reports_recurses_into_date_folders_and_prunes_empty_ones(tm
 def test_cleanup_old_reports_rejects_negative_retention_days(tmp_path) -> None:
     with pytest.raises(ValueError, match="report_retention_days"):
         cleanup_old_reports(tmp_path, retention_days=-1)
+
+
+def test_cleanup_old_reports_ignores_invalid_ownership_marker(tmp_path) -> None:
+    reports_directory = ensure_reports_directory(tmp_path)
+    report = reports_directory / "report_101010.html"
+    report.write_text("user report", encoding="utf-8")
+    report_ownership_path(report).write_bytes(b"\xff\xfe")
+
+    assert cleanup_old_reports(tmp_path, retention_days=0) == ()
+    assert report.read_text(encoding="utf-8") == "user report"
 
 
 def test_should_cleanup_temp_artifact_preserves_known_config_entries(tmp_path) -> None:
@@ -139,7 +154,7 @@ def test_should_cleanup_temp_artifact_preserves_known_config_entries(tmp_path) -
         assert not should_cleanup_temp_artifact(candidate)
 
 
-def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
+def test_cleanup_temp_artifacts_preserves_unowned_root_entries(tmp_path) -> None:
     removable_directory = tmp_path / ".browser-check-profile"
     removable_tmp_directory = tmp_path / ".tmp_chrome_report_test"
     removable_cache_directory = tmp_path / "__pycache__"
@@ -162,20 +177,13 @@ def test_cleanup_temp_artifacts_removes_root_temp_noise_only(tmp_path) -> None:
 
     removed_artifacts = cleanup_temp_artifacts(tmp_path)
 
-    assert set(removed_artifacts) == {
-        removable_directory.resolve(),
-        removable_tmp_directory.resolve(),
-        removable_cache_directory.resolve(),
-        removable_dot_file.resolve(),
-        removable_tmp_file.resolve(),
-        removable_artifacts_directory.resolve(),
-    }
-    assert not removable_directory.exists()
-    assert not removable_tmp_directory.exists()
-    assert not removable_cache_directory.exists()
-    assert not removable_dot_file.exists()
-    assert not removable_tmp_file.exists()
-    assert not removable_artifacts_directory.exists()
+    assert removed_artifacts == ()
+    assert removable_directory.exists()
+    assert removable_tmp_directory.exists()
+    assert removable_cache_directory.exists()
+    assert removable_dot_file.exists()
+    assert removable_tmp_file.exists()
+    assert removable_artifacts_directory.exists()
     assert preserved_reports.exists()
     assert preserved_engine.exists()
     assert preserved_gitignore.exists()

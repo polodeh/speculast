@@ -61,10 +61,18 @@ class GeneratorEngine(IGenerator):
         """Generate a structured pytest suite under tests/."""
 
         tests_root = self._resolve_tests_root(output_path)
-        tests_root.mkdir(parents=True, exist_ok=True)
         suite_output = self._resolve_suite_output(output_path)
+        destinations = (
+            suite_output,
+            tests_root / "conftest.py",
+            tests_root / "pyproject.toml",
+        )
+        for destination in destinations:
+            if destination.exists():
+                raise FileExistsError(f"Refusing to overwrite existing file: {destination}")
+
+        tests_root.mkdir(parents=True, exist_ok=True)
         suite_output.parent.mkdir(parents=True, exist_ok=True)
-        self._cleanup_legacy_generated_suite(tests_root, suite_output)
 
         suite_plan = self._build_suite_plan(metadata.functions)
         context = self._build_context(metadata.project, metadata.functions, suite_plan)
@@ -320,29 +328,20 @@ class GeneratorEngine(IGenerator):
             return resolved
         return self._resolve_tests_root(output_path) / "test_generated.py"
 
-    def _write_template(self, template_name: str, output_path: Path, context: Mapping[str, Any]) -> None:
+    def _write_template(
+        self, template_name: str, output_path: Path, context: Mapping[str, Any]
+    ) -> None:
         rendered = self.environment.get_template(template_name).render(**context)
-        output_path.write_text(rendered, encoding="utf-8")
-
-    def _cleanup_legacy_generated_suite(self, tests_root: Path, suite_output: Path) -> None:
-        legacy_paths = (
-            tests_root / "unit" / "test_logic.py",
-            tests_root / "integration" / "test_service.py",
-        )
-        for legacy_path in legacy_paths:
-            if legacy_path == suite_output:
-                continue
-            if legacy_path.exists() and legacy_path.is_file():
-                legacy_path.unlink()
-
-        for legacy_directory in (tests_root / "unit", tests_root / "integration"):
-            if legacy_directory.is_dir() and not any(legacy_directory.iterdir()):
-                legacy_directory.rmdir()
+        with output_path.open("x", encoding="utf-8") as output_file:
+            output_file.write(rendered)
 
     @staticmethod
     def _ensure_package_marker(path: Path) -> None:
         if not path.exists():
-            path.write_text("", encoding="utf-8")
+            try:
+                path.open("x", encoding="utf-8").close()
+            except FileExistsError:
+                pass
 
     @classmethod
     def _build_loader(cls, templates_path: Path | None) -> FileSystemLoader | DictLoader:

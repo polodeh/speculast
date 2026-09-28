@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -42,16 +43,26 @@ class InfraManager(IInfraManager):
 
         return self.registry.plan(required_infra)
 
-    def create_compose_file(self, project_root: Path, required_infra: Sequence[str], /) -> Path | None:
-        """Create docker-compose.yaml in the project root for detected services."""
+    def create_compose_file(
+        self,
+        project_root: Path,
+        required_infra: Sequence[str],
+        /,
+        *,
+        output_directory: Path | None = None,
+    ) -> Path | None:
+        """Create an isolated Compose file without changing project infrastructure."""
 
         resolved_root = project_root.resolve()
         compose_content = self._build_compose_content(required_infra)
         if compose_content is None:
             return None
 
-        output_path = resolved_root / "docker-compose.yaml"
-        output_path.write_text(compose_content, encoding="utf-8")
+        output_root = output_directory or resolved_root / ".speculast" / "runs" / uuid.uuid4().hex
+        output_root.mkdir(parents=True, exist_ok=True)
+        output_path = output_root / "docker-compose.yaml"
+        with output_path.open("x", encoding="utf-8") as output_file:
+            output_file.write(compose_content)
         return output_path
 
     @classmethod

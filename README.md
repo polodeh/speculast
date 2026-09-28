@@ -61,23 +61,25 @@ speculast . --no-viz --lang en
 By default, `speculast` runs in Full Auto mode:
 
 - uses the current directory when `PATH` is omitted;
-- cleans temporary root-level technical noise automatically;
+- keeps unknown temporary and hidden project files untouched;
 - enables real DB mode by default;
 - runs generated tests;
 - builds the HTML report;
 - opens the fresh report in the browser automatically.
 
-`--cleanup-reports` additionally prunes aged HTML reports from `reports/`.
+`--cleanup-reports` prunes only aged HTML reports whose Speculast ownership marker
+matches the report content. The legacy `--no-cleanup` flag is accepted for
+compatibility; generic root-level cleanup is disabled for safety.
 
 The default full cycle performs:
 
 1. semantic analysis;
 2. test generation;
 3. infrastructure planning;
-4. `docker compose up -d` when services are required;
+4. `docker compose -f <generated-file> -p <isolated-project> up -d` when services are required;
 5. pytest execution with coverage and JSON reports;
 6. HTML report generation;
-7. `docker compose down --remove-orphans`.
+7. `docker compose -f <generated-file> -p <isolated-project> down`.
 
 ## Template and Report Portability
 
@@ -101,15 +103,11 @@ speculast
 
 Expected outputs:
 
-- generated test suite under `tests/`;
-- `docker-compose.yaml` when infrastructure is required;
+- generated test suite under `.speculast/runs/<id>/tests/`;
+- generated Compose file under `.speculast/runs/<id>/` when infrastructure is required;
 - date-grouped reports such as `reports/2026-05-14/report_131530.html`.
 
-If you also want to keep raw pytest and coverage JSON artifacts:
-
-```bash
-speculast . --no-cleanup
-```
+Raw pytest and coverage JSON artifacts are kept under `.speculast/runs/<id>/`.
 
 If you only need the report without pytest execution:
 
@@ -178,12 +176,12 @@ speculast . --lang en
 Recommended artifacts to publish from the job:
 
 - `reports/`
-- generated `tests/` directory if you want to inspect emitted suites
+- `.speculast/runs/` if you want to inspect emitted suites and raw JSON
 
-If the pipeline should also retain raw pytest and coverage JSON files, run with `--no-cleanup` and publish:
+Raw pytest and coverage JSON files are retained at:
 
-- `.speculast/pytest-report.json`
-- `.speculast/coverage.json`
+- `.speculast/runs/<id>/pytest-report.json`
+- `.speculast/runs/<id>/coverage.json`
 
 Example GitHub Actions step:
 
@@ -237,11 +235,13 @@ So after installation, `speculast` runs the same autonomous CLI cycle exposed by
 
 Depending on the mode, the framework can generate:
 
-- `tests/`
-- `docker-compose.yaml`
+- `.speculast/runs/<id>/tests/`
+- `.speculast/runs/<id>/docker-compose.yaml` when infrastructure is required
 - `reports/`
 
-Temporary technical artifacts such as `.speculast/`, cache folders, and browser-check profiles are removed automatically unless `--no-cleanup` is used.
+Speculast does not delete unknown temporary files, hidden folders, or legacy
+reports. Generated runs remain on disk; remove them manually only after review.
+Explicit generation into an existing test or report path raises `FileExistsError`.
 
 ## Development Notes
 

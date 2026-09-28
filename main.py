@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
+import uuid
 import webbrowser
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -36,7 +37,6 @@ from engine.generator.engine import GeneratorEngine
 from engine.infra.manager import InfraManager
 from engine.parser import derive_module_name, detect_source_root, read_python_source
 from engine.visualizer.renderer import VisualReportRenderer
-
 
 ASCII_LOGO = r"""
                            _           _
@@ -77,22 +77,6 @@ REPORT_FILE_EXTENSION = ".html"
 REPORT_DIRECTORY_DATE_FORMAT = "%Y-%m-%d"
 REPORT_FILE_TIME_FORMAT = "%H%M%S"
 DEFAULT_REPORT_RETENTION_DAYS = 7
-TEMP_ARTIFACT_EXCLUDED_NAMES = frozenset(
-    {
-        ".env",
-        ".env.example",
-        ".editorconfig",
-        ".git",
-        ".gitattributes",
-        ".gitignore",
-        ".gitmodules",
-        ".idea",
-        ".python-version",
-        ".venv",
-    }
-)
-
-
 @dataclass(slots=True)
 class ArtifactBundle:
     generated_test_path: Path | None = None
@@ -391,7 +375,6 @@ def execute_pipeline(
         progress.update(task_id, description=f"[cyan]{tr(lang, 'terminal.progress.semantic_analysis')}[/cyan]")
         project_root, initial_analysis = run_analysis(analyzer, input_path, lang)
         reports_directory = ensure_reports_directory(project_root)
-        migrate_legacy_report_artifacts(project_root, reports_directory=reports_directory)
         if cleanup_reports:
             cleanup_old_reports(
                 project_root,
@@ -420,6 +403,7 @@ def execute_pipeline(
         artifacts.compose_path = infra_manager.create_compose_file(
             project_root,
             analysis_result.required_infra,
+            output_directory=artifacts.generated_test_path.parent.parent,
         )
         progress.advance(task_id)
 
@@ -428,9 +412,10 @@ def execute_pipeline(
                 docker_cleanup_required = artifacts.compose_path is not None
                 progress.update(task_id, description=f"[cyan]{tr(lang, 'terminal.progress.starting_docker')}[/cyan]")
                 ensure_docker_daemon(lang)
-                run_compose_up(project_root, lang)
+                run_compose_up(project_root, artifacts.compose_path, lang)
                 runtime_status = wait_for_services(
                     project_root,
+                    artifacts.compose_path,
                     analysis_result.required_infra,
                     infra_manager,
                     lang,
@@ -439,7 +424,10 @@ def execute_pipeline(
 
             if run_tests:
                 progress.update(task_id, description=f"[cyan]{tr(lang, 'terminal.progress.running_tests')}[/cyan]")
-                artifacts_root = ensure_artifacts_directory(project_root)
+                artifacts_root = ensure_artifacts_directory(
+                    project_root,
+                    run_directory=artifacts.generated_test_path.parent.parent,
+                )
                 execution_result = run_generated_tests(
                     project_root=project_root,
                     generated_test_path=artifacts.generated_test_path,
@@ -481,11 +469,12 @@ def execute_pipeline(
                     artifacts=artifacts.as_rows(),
                     run_mode=report_run_mode_key(run_tests=run_tests),
                 )
+                mark_owned_report(artifacts.report_path)
                 progress.advance(task_id)
         finally:
             if should_manage_infra and docker_cleanup_required and artifacts.compose_path is not None:
                 progress.update(task_id, description=f"[cyan]{tr(lang, 'terminal.progress.stopping_docker')}[/cyan]")
-                run_compose_down(project_root, lang)
+                run_compose_down(project_root, artifacts.compose_path, lang)
                 progress.advance(task_id)
 
     if analysis_result is None:
@@ -571,8 +560,8 @@ def render_analysis_warnings(
     )
 
 
-def ensure_artifacts_directory(project_root: Path) -> Path:
-    artifacts_root = (project_root / ".speculast").resolve()
+def ensure_artifacts_directory(project_root: Path, *, run_directory: Path | None = None) -> Path:
+    artifacts_root = (run_directory or project_root / ".speculast").resolve()
     artifacts_root.mkdir(parents=True, exist_ok=True)
     return artifacts_root
 
@@ -621,7 +610,7 @@ def build_report_output_path(
     report_time = report_moment.strftime(REPORT_FILE_TIME_FORMAT)
     candidate = report_day_directory / f"{REPORT_FILE_PREFIX}{report_time}{REPORT_FILE_EXTENSION}"
     suffix = 1
-    while candidate.exists():
+    while candidate.exists() or report_ownership_path(candidate).exists():
         candidate = report_day_directory / (
             f"{REPORT_FILE_PREFIX}{report_time}_{suffix:02d}{REPORT_FILE_EXTENSION}"
         )
@@ -634,30 +623,18 @@ def migrate_legacy_report_artifacts(
     *,
     reports_directory: Path | None = None,
 ) -> tuple[Path, ...]:
-    resolved_reports_directory = reports_directory or ensure_reports_directory(project_root)
-    migrated_paths: list[Path] = []
+    """Retain unknown legacy files; their ownership cannot be established."""
+    return ()
 
-    for candidate in project_root.iterdir():
-        if not candidate.is_file() or not candidate.name.startswith(REPORT_ARTIFACT_PREFIX):
-            continue
 
-        modified_at = datetime.fromtimestamp(candidate.stat().st_mtime)
-        target_directory = build_report_day_directory_for_timestamp(
-            modified_at,
-            reports_directory=resolved_reports_directory,
-        )
-        target_path = target_directory / candidate.name
-        suffix = 1
-        while target_path.exists():
-            target_path = target_directory / (
-                f"{candidate.stem}_{suffix:02d}{candidate.suffix}"
-            )
-            suffix += 1
+def report_ownership_path(report_path: Path) -> Path:
+    return report_path.with_name(report_path.name + ".speculast-owned")
 
-        candidate.replace(target_path)
-        migrated_paths.append(target_path.resolve())
 
-    return tuple(migrated_paths)
+def mark_owned_report(report_path: Path) -> None:
+    digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    with report_ownership_path(report_path).open("x", encoding="ascii") as marker:
+        marker.write(digest)
 
 
 def cleanup_old_reports(
@@ -674,54 +651,38 @@ def cleanup_old_reports(
     cutoff = (now or datetime.now()) - timedelta(days=retention_days)
     removed_reports: list[Path] = []
 
-    for candidate in resolved_reports_directory.rglob("*"):
-        if not candidate.is_file() or not candidate.name.startswith(REPORT_ARTIFACT_PREFIX):
+    report_pattern = f"{REPORT_FILE_PREFIX}*{REPORT_FILE_EXTENSION}"
+    for candidate in resolved_reports_directory.rglob(report_pattern):
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        marker = report_ownership_path(candidate)
+        if not marker.is_file() or marker.is_symlink():
+            continue
+        try:
+            expected_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            marker_digest = marker.read_text(encoding="ascii")
+        except (OSError, UnicodeError):
+            continue
+        if marker_digest != expected_digest:
             continue
         modified_at = datetime.fromtimestamp(candidate.stat().st_mtime)
         if modified_at >= cutoff:
             continue
         candidate.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
         removed_reports.append(candidate)
-
-    for directory in sorted(resolved_reports_directory.rglob("*"), reverse=True):
-        if not directory.is_dir():
-            continue
-        if any(directory.iterdir()):
-            continue
-        directory.rmdir()
+        if not any(candidate.parent.iterdir()):
+            candidate.parent.rmdir()
 
     return tuple(removed_reports)
 
 
 def cleanup_temp_artifacts(project_root: Path) -> tuple[Path, ...]:
-    removed_artifacts: list[Path] = []
-
-    for candidate in sorted(project_root.iterdir(), key=lambda path: path.name.lower()):
-        if not should_cleanup_temp_artifact(candidate):
-            continue
-
-        resolved_candidate = candidate.resolve()
-        if candidate.is_dir() and not candidate.is_symlink():
-            shutil.rmtree(candidate, ignore_errors=False)
-        else:
-            candidate.unlink(missing_ok=True)
-        removed_artifacts.append(resolved_candidate)
-
-    return tuple(removed_artifacts)
+    """Leave untracked temporary files untouched when ownership is unknown."""
+    return ()
 
 
 def should_cleanup_temp_artifact(candidate: Path) -> bool:
-    name = candidate.name
-    lowered_name = name.lower()
-
-    if name in TEMP_ARTIFACT_EXCLUDED_NAMES:
-        return False
-    if name == "__pycache__":
-        return True
-    if "tmp" in lowered_name:
-        return True
-    if name.startswith("."):
-        return True
     return False
 
 
@@ -763,9 +724,14 @@ def docker_daemon_status() -> tuple[bool, str]:
     return False, completed.stderr.strip() or completed.stdout.strip()
 
 
-def run_compose_up(project_root: Path, lang: LanguageCode) -> None:
+def compose_command(compose_path: Path) -> list[str]:
+    digest = hashlib.sha256(str(compose_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return ["docker", "compose", "-p", f"speculast_{digest}", "-f", str(compose_path)]
+
+
+def run_compose_up(project_root: Path, compose_path: Path, lang: LanguageCode) -> None:
     completed = run_subprocess(
-        ["docker", "compose", "up", "-d"],
+        [*compose_command(compose_path), "up", "-d"],
         cwd=project_root,
         check=False,
     )
@@ -775,6 +741,7 @@ def run_compose_up(project_root: Path, lang: LanguageCode) -> None:
 
 def wait_for_services(
     project_root: Path,
+    compose_path: Path,
     required_infra: Sequence[str],
     infra_manager: InfraManager,
     lang: LanguageCode,
@@ -795,7 +762,7 @@ def wait_for_services(
     while time.monotonic() < deadline:
         ready_count = 0
         for logical_name, compose_name in logical_to_compose.items():
-            status = inspect_service_status(project_root, compose_name)
+            status = inspect_service_status(project_root, compose_path, compose_name)
             latest_status[logical_name] = status
             if status in CONTAINER_READY_STATES:
                 ready_count += 1
@@ -807,9 +774,11 @@ def wait_for_services(
     raise RuntimeError(tr(lang, "terminal.errors.containers_not_ready", details=unresolved))
 
 
-def inspect_service_status(project_root: Path, compose_service_name: str) -> str:
+def inspect_service_status(
+    project_root: Path, compose_path: Path, compose_service_name: str
+) -> str:
     id_result = run_subprocess(
-        ["docker", "compose", "ps", "-q", compose_service_name],
+        [*compose_command(compose_path), "ps", "-q", compose_service_name],
         cwd=project_root,
         check=False,
     )
@@ -835,9 +804,9 @@ def inspect_service_status(project_root: Path, compose_service_name: str) -> str
     return inspect_result.stdout.strip().lower() or "starting"
 
 
-def run_compose_down(project_root: Path, lang: LanguageCode) -> None:
+def run_compose_down(project_root: Path, compose_path: Path, lang: LanguageCode) -> None:
     completed = run_subprocess(
-        ["docker", "compose", "down", "--remove-orphans"],
+        [*compose_command(compose_path), "down"],
         cwd=project_root,
         check=False,
     )
@@ -864,6 +833,8 @@ def run_generated_tests(
         "pytest",
         str(generated_test_path),
         "-q",
+        "-p",
+        "no:cacheprovider",
         "--disable-warnings",
         "--json-report",
         f"--json-report-file={pytest_report_path}",
@@ -871,7 +842,10 @@ def run_generated_tests(
         f"--cov-report=json:{coverage_path}",
         "--cov-report=",
     ]
-    completed = run_subprocess(command, cwd=project_root, check=False)
+    environment = os.environ.copy()
+    environment["COVERAGE_FILE"] = str(artifacts_root / ".coverage")
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = run_subprocess(command, cwd=project_root, env=environment, check=False)
 
     report_data = load_json_file(pytest_report_path)
     coverage_data = load_json_file(coverage_path)
@@ -1012,11 +986,13 @@ def run_subprocess(
     command: Sequence[str],
     *,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
         cwd=str(cwd) if cwd is not None else None,
+        env=env,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -1160,7 +1136,7 @@ def build_infra_score(required_infra: Sequence[str], runtime_status: Mapping[str
 
 
 def build_test_output_path(project_root: Path, input_path: Path) -> Path:
-    tests_directory = project_root / "tests"
+    tests_directory = project_root / ".speculast" / "runs" / uuid.uuid4().hex / "tests"
     if input_path.is_file():
         module_root = detect_source_root(input_path, project_root)
         suite_name = sanitize_name(derive_module_name(input_path, module_root).replace(".", "_"))
